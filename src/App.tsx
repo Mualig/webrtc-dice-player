@@ -6,6 +6,7 @@ import { Dice } from './components/Dice'
 import { HistoryEntry } from './components/History'
 import { ConnectionPanel } from './components/ConnectionPanel'
 import { SidePanel } from './components/SidePanel'
+import { Scorecard } from './components/Scorecard'
 
 const NAME_KEY = 'webrtc-dice-player-player-name'
 const COLOR_KEY = 'webrtc-dice-player-player-color'
@@ -266,6 +267,8 @@ function App() {
           {rolling ? 'Rolling…' : 'Roll dice'}
         </button>
       </div>
+
+      <Scorecard />
 
       <section className="w-full max-w-md">
         <div className="mb-3 flex items-center justify-between">
