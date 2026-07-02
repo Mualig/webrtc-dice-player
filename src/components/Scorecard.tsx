@@ -299,7 +299,9 @@ export function Scorecard({ onMove }: Readonly<{ onMove?: (event: MoveEvent) => 
       </header>
 
       <div className="overflow-x-auto pb-1">
-        <div className="flex min-w-max flex-col gap-2">
+        {/* items-center keeps each colored row only as wide as its content (arrow
+            → cells → lock) — not stretched to fill a wider card — and centers it. */}
+        <div className="flex min-w-max flex-col items-center gap-2">
           {SCORE_ROWS.map(({ color, numbers }) => (
             <Row key={color} color={color} numbers={numbers} row={card.marks[color]} onMark={mark} />
           ))}
