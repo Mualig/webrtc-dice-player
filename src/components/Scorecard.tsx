@@ -159,7 +159,10 @@ function ScoreBox({ value, className }: Readonly<{ value: number; className: str
 // Scores update live. State is local to this player and saved to localStorage.
 // Each move is also reported via `onMove` so the app can broadcast it to the
 // other players' activity feeds — the card itself stays room-agnostic.
-export function Scorecard({ onMove }: Readonly<{ onMove?: (event: MoveEvent) => void }>) {
+export function Scorecard({
+  onMove,
+  onScore,
+}: Readonly<{ onMove?: (event: MoveEvent) => void; onScore?: (total: number) => void }>) {
   const [card, setCard] = useState<CardState>(loadState)
   // Monotonic id stamped on each move so undo can name the exact move it reverts.
   const nextMoveId = useRef(0)
@@ -237,6 +240,11 @@ export function Scorecard({ onMove }: Readonly<{ onMove?: (event: MoveEvent) => 
   const grandTotal = scores.reduce((a, b) => a + b, 0) - penaltyTotal
   const anyMarks = SCORE_ROWS.some((r) => countMarks(card.marks[r.color]) > 0) || card.penalties > 0
   const canUndo = card.history.length > 0
+
+  // Report our running total so the app can share it in the other-players board.
+  useEffect(() => {
+    onScore?.(grandTotal)
+  }, [grandTotal, onScore])
 
   return (
     <section className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-lg">

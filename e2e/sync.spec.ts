@@ -18,6 +18,8 @@ function rowsUnder(page: Page, heading: string): Locator {
 // The roll-history rows, and the scorecard-activity rows (each newest first).
 const history = (page: Page): Locator => rowsUnder(page, 'History')
 const activity = (page: Page): Locator => rowsUnder(page, 'Scorecard activity')
+// The other-players score rows.
+const scoreboard = (page: Page): Locator => rowsUnder(page, 'Other players')
 
 // The six die values shown in a single history row (1–6 chips, excluding the
 // "#n" label and the roller name).
@@ -47,9 +49,10 @@ async function connectHostAndClient(browser: Browser): Promise<{ host: Page; cli
   await expect(client.getByText(/Connected to room/)).toBeVisible()
   await client.keyboard.press('Escape')
 
-  // Host sees the client in the roster before the test proceeds.
+  // Host sees the client in the roster before the test proceeds. Scope to the
+  // menu drawer — "Bob" also appears in the on-page scoreboard.
   await host.getByRole('button', { name: 'Open menu' }).click()
-  await expect(host.getByText('Bob')).toBeVisible()
+  await expect(host.getByRole('dialog', { name: 'Menu' }).getByText('Bob')).toBeVisible()
   await host.keyboard.press('Escape')
 
   return { host, client }
@@ -88,6 +91,10 @@ test("scorecard moves appear in each player's activity feed", async ({ browser }
   await expect(activity(client)).toHaveCount(1)
   await expect(activity(client).first()).toContainText('Alice')
   await expect(activity(client).first()).toContainText('crossed off red 7')
+
+  // The client's "Other players" board shows Alice's synced total (one cross = 1).
+  const aliceScore = scoreboard(client).filter({ hasText: 'Alice' })
+  await expect(aliceScore).toContainText('1')
 
   // --- Client takes a penalty → the host sees it, attributed to Bob, newest first ---
   await client.getByRole('button', { name: 'Penalty 1' }).click()

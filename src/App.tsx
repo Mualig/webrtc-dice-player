@@ -9,6 +9,7 @@ import { ConnectionPanel } from './components/ConnectionPanel'
 import { SidePanel } from './components/SidePanel'
 import { Scorecard } from './components/Scorecard'
 import { ActivityFeed } from './components/ActivityFeed'
+import { ScoreBoard } from './components/ScoreBoard'
 
 // The activity feed keeps only the most recent moves so the log — and the
 // message that broadcasts it — stays bounded over a long game.
@@ -48,16 +49,21 @@ function App() {
   const [color, setColor] = useState(() => localStorage.getItem(COLOR_KEY) ?? randomColor())
   const [players, setPlayers] = useState<Player[]>([])
   const [actions, setActions] = useState<ActionEntry[]>([])
+  // Our own scorecard total (reported by <Scorecard onScore>), and every player's
+  // total keyed by peer id (the host aggregates and broadcasts this).
+  const [myScore, setMyScore] = useState(0)
+  const [scores, setScores] = useState<Record<string, number>>({})
   // Host-assigned id for the roll history (the host is its sole writer). Activity
   // entries instead key off the mover's own stable move id (see applyMove).
   const nextId = useRef(1)
 
-  // Refs mirror the latest dice/history/roster/activity so PeerJS event handlers
-  // and the delayed roll callback read current values instead of stale closures.
+  // Refs mirror the latest dice/history/roster/activity/scores so PeerJS event
+  // handlers and the delayed roll callback read current values, not stale closures.
   const diceRef = useRef(dice)
   const historyRef = useRef(history)
   const playersRef = useRef(players)
   const actionsRef = useRef(actions)
+  const scoresRef = useRef(scores)
 
   // `handleMessage`/`handleClientJoin`/`handleClientLeave` are hoisted and only
   // ever invoked after render (on a peer event), so passing them straight through
@@ -99,6 +105,19 @@ function App() {
       setPlayers(nextPlayers)
       if (role === 'host') {
         send({ type: 'roster', players: nextPlayers } satisfies Message)
+      }
+    },
+    [role, send],
+  )
+
+  // Commit the per-player scores locally; the host (authoritative) broadcasts
+  // them. Memoized so the score-reporting effects can depend on it without churn.
+  const updateScores = useCallback(
+    (next: Record<string, number>) => {
+      scoresRef.current = next
+      setScores(next)
+      if (role === 'host') {
+        send({ type: 'scores', scores: next } satisfies Message)
       }
     },
     [role, send],
@@ -175,6 +194,7 @@ function App() {
       if (m.type === 'roll') performRoll(m.roller)
       else if (m.type === 'clear') clearHistory()
       else if (m.type === 'action') applyMove(m.actor, m.event)
+      else if (m.type === 'score') updateScores({ ...scoresRef.current, [m.id]: m.total })
       else if (m.type === 'hello') {
         // We key the roster on the client's self-reported id, which PeerJS
         // guarantees equals the transport's `conn.peer` — so handleClientLeave
@@ -190,21 +210,27 @@ function App() {
         updateRoster(m.players)
       } else if (m.type === 'actions') {
         applyActions(m.actions)
+      } else if (m.type === 'scores') {
+        updateScores(m.scores)
       }
     }
   }
 
-  // Host: bring a newly-connected client up to date with current state, roster
-  // and the shared activity log.
+  // Host: bring a newly-connected client up to date with current state, roster,
+  // the shared activity log and every player's score.
   function handleClientJoin() {
     send({ type: 'state', dice: diceRef.current, history: historyRef.current } satisfies Message)
     send({ type: 'roster', players: playersRef.current } satisfies Message)
     send({ type: 'actions', actions: actionsRef.current } satisfies Message)
+    send({ type: 'scores', scores: scoresRef.current } satisfies Message)
   }
 
-  // Host: drop a disconnected client from the roster.
+  // Host: drop a disconnected client from the roster and the scoreboard.
   function handleClientLeave(id: string) {
     updateRoster(playersRef.current.filter((player) => player.id !== id))
+    const rest = { ...scoresRef.current }
+    delete rest[id]
+    updateScores(rest)
   }
 
   // Auto-join when opened via a shared ?room=CODE link.
@@ -237,6 +263,14 @@ function App() {
     }
   }, [role, status, peerId, myName, color, send])
 
+  // Host: keep our own score in the shared board; client: report it to the host.
+  // Runs on connect and whenever our total changes.
+  useEffect(() => {
+    if (status !== 'connected' || !peerId) return
+    if (role === 'host') updateScores({ ...scoresRef.current, [peerId]: myScore })
+    else if (role === 'client') send({ type: 'score', id: peerId, total: myScore } satisfies Message)
+  }, [role, status, peerId, myScore, updateScores, send])
+
   const shareLink = roomCode
     ? `${window.location.origin}${window.location.pathname}?room=${roomCode}`
     : ''
@@ -255,6 +289,8 @@ function App() {
     setPlayers([])
     actionsRef.current = []
     setActions([])
+    scoresRef.current = {}
+    setScores({})
   }
   function startHosting() {
     resetSession()
@@ -326,46 +362,52 @@ function App() {
         </button>
       </div>
 
-      {/* The scorecard with the live activity feed beside it on wide screens, so
-          moves are visible without scrolling; they stack on narrower ones. */}
-      <div className="flex w-full max-w-7xl flex-col items-center gap-6 xl:flex-row xl:items-stretch xl:justify-center">
-        <Scorecard onMove={recordMove} />
-        {/* Shared feed of everyone's scorecard moves — only meaningful in a room. */}
+      {/* 2×2 grid on wide screens: the scorecard and the activity feed share the
+          top row (so the feed is exactly the scorecard's height), with the other-
+          players scoreboard and the dice history — the least important part — on
+          the row beneath them. Everything stacks into one column on narrow screens. */}
+      <div className="grid w-full max-w-7xl grid-cols-1 gap-6 xl:grid-cols-[minmax(0,48rem)_minmax(0,28rem)] xl:justify-center">
+        {/* Lift the total only in a room — solo has no scoreboard, so skipping it
+            avoids re-rendering the whole app on every cross/penalty/undo. */}
+        <Scorecard onMove={recordMove} onScore={role === 'solo' ? undefined : setMyScore} />
+        {/* Shared feed + other players' scores — only meaningful in a room. */}
         {role !== 'solo' && (
-          <ActivityFeed actions={actions} resolveActor={resolvePlayer} />
+          <>
+            <ActivityFeed actions={actions} resolveActor={resolvePlayer} />
+            <ScoreBoard className="xl:self-start" players={players} scores={scores} selfId={selfId} />
+          </>
         )}
-      </div>
-
-      <section className="w-full max-w-md">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-zinc-900">History</h2>
-          {history.length > 0 && (
-            <button
-              type="button"
-              onClick={clearHistory}
-              className="text-sm font-medium text-zinc-500 transition hover:text-zinc-900"
-            >
-              Clear
-            </button>
+        <section className="w-full xl:self-start">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-zinc-900">History</h2>
+            {history.length > 0 && (
+              <button
+                type="button"
+                onClick={clearHistory}
+                className="text-sm font-medium text-zinc-500 transition hover:text-zinc-900"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {history.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-6 text-center text-sm text-zinc-400">
+              No rolls yet — hit “Roll dice” to get started.
+            </p>
+          ) : (
+            <ul className="flex max-h-80 flex-col gap-2 overflow-y-auto pr-1">
+              {history.map((entry, index) => (
+                <HistoryEntry
+                  key={entry.id}
+                  entry={entry}
+                  label={history.length - index}
+                  roller={resolvePlayer(entry.roller)}
+                />
+              ))}
+            </ul>
           )}
-        </div>
-        {history.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-6 text-center text-sm text-zinc-400">
-            No rolls yet — hit “Roll dice” to get started.
-          </p>
-        ) : (
-          <ul className="flex max-h-80 flex-col gap-2 overflow-y-auto pr-1">
-            {history.map((entry, index) => (
-              <HistoryEntry
-                key={entry.id}
-                entry={entry}
-                label={history.length - index}
-                roller={resolvePlayer(entry.roller)}
-              />
-            ))}
-          </ul>
-        )}
-      </section>
+        </section>
+      </div>
     </main>
   )
 }

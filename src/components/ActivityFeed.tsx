@@ -40,9 +40,9 @@ export function ActivityFeed({
           No scorecard moves yet — players’ crosses and penalties show up here.
         </p>
       ) : (
-        // On wide screens the row stretches this column to the scorecard's
-        // height. The list is taken out of normal flow (absolute) so its own
-        // length can't drive that height; it then fills the column and scrolls.
+        // On wide screens the grid stretches this card to the scorecard's height;
+        // the list is taken out of flow (absolute) so its own length can't drive
+        // that height, then fills the card and scrolls within it.
         <div className="min-h-0 xl:relative xl:flex-1">
           <ul className="flex max-h-80 flex-col gap-2 overflow-y-auto pr-1 xl:absolute xl:inset-0 xl:max-h-none">
             {actions.map((entry) => {
