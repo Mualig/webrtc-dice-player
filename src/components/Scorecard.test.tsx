@@ -153,17 +153,33 @@ describe('<Scorecard />', () => {
     expect(cell('red 7, crossed off')).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('resets every mark and penalty', async () => {
+  it('resets every mark and penalty once the reset is confirmed', async () => {
     const user = userEvent.setup()
     render(<Scorecard />)
 
     await user.click(cell('red 7'))
     await user.click(cell('Penalty 1'))
-    await user.click(cell('Reset card'))
+    await user.click(cell('Reset card')) // opens the confirmation
+    await user.click(cell('Reset')) // confirms
 
     expect(cell('red 7')).toHaveAttribute('aria-pressed', 'false')
     expect(totals().grand).toBe(0)
     expect(cell('Reset card')).toBeDisabled()
+  })
+
+  it('does not reset when the confirmation is cancelled', async () => {
+    const user = userEvent.setup()
+    render(<Scorecard />)
+
+    await user.click(cell('red 7'))
+    await user.click(cell('Reset card')) // opens the confirmation — nothing cleared yet
+    expect(cell('red 7, crossed off')).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(cell('Cancel'))
+
+    expect(cell('red 7, crossed off')).toHaveAttribute('aria-pressed', 'true') // still crossed
+    expect(totals().grand).toBe(1)
+    expect(screen.queryByRole('dialog', { name: 'Reset card?' })).toBeNull() // popover closed
   })
 
   it('reports each move to onMove for broadcasting', async () => {
