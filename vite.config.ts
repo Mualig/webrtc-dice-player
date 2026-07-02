@@ -1,4 +1,6 @@
-import { defineConfig } from 'vite'
+// Importing defineConfig from 'vitest/config' (a superset of Vite's) types the
+// `test` block below; it stays inert for `vite build`/`dev`.
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -10,4 +12,12 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig(({ command }) => ({
   base: command === 'build' ? (process.env.VITE_BASE ?? './') : '/',
   plugins: [react(), tailwindcss()],
+  test: {
+    // jsdom gives component tests a DOM; pure-logic tests run fine under it too.
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    // Only Vitest specs under src/; the Playwright E2E specs live in e2e/ and
+    // must not be collected here (they use @playwright/test, not Vitest).
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+  },
 }))

@@ -24,6 +24,19 @@ const CONNECT_TIMEOUT_MS = 12000
 
 const LOG = '[peer]'
 
+// Optionally point PeerJS at a self-hosted signaling broker (used by the E2E
+// tests, which run a local peerjs-server). When VITE_PEER_HOST is unset we pass
+// `undefined`, so PeerJS falls back to its public cloud broker exactly as before.
+const PEER_OPTIONS = import.meta.env.VITE_PEER_HOST
+  ? {
+      host: import.meta.env.VITE_PEER_HOST,
+      port: Number(import.meta.env.VITE_PEER_PORT ?? 443),
+      path: import.meta.env.VITE_PEER_PATH ?? '/',
+      secure: import.meta.env.VITE_PEER_SECURE !== 'false',
+      key: import.meta.env.VITE_PEER_KEY ?? 'peerjs',
+    }
+  : undefined
+
 function randomCode() {
   let code = ''
   for (let i = 0; i < 4; i++) {
@@ -111,7 +124,7 @@ export function usePeerSync({ onMessage, onClientJoin, onClientLeave }: Options)
       const code = randomCode()
       const id = ROOM_PREFIX + code
       console.log(LOG, 'host: registering id', id)
-      const peer = new Peer(id)
+      const peer = new Peer(id, PEER_OPTIONS)
       peerRef.current = peer
       let opened = false
 
@@ -182,7 +195,9 @@ export function usePeerSync({ onMessage, onClientJoin, onClientLeave }: Options)
       setError(null)
 
       console.log(LOG, 'client: creating peer to join', code)
-      const peer = new Peer()
+      // No fixed id (the broker assigns one). Pass broker options only when set,
+      // otherwise let PeerJS use its cloud defaults.
+      const peer = PEER_OPTIONS ? new Peer(PEER_OPTIONS) : new Peer()
       peerRef.current = peer
       let connected = false
 
