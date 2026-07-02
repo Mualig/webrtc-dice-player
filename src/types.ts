@@ -1,3 +1,5 @@
+import type { LoggedMove, MoveEvent } from './scorecard'
+
 export type DiceColor = 'white' | 'red' | 'yellow' | 'green' | 'blue'
 
 export type Die = {
@@ -17,6 +19,18 @@ export type RollEntry = {
 
 export type Player = { id: string; name: string; color: string }
 
+// A scorecard move by a player, for the shared activity feed. `actor` is the
+// self-reported player (its id keys the live name/color lookup, exactly like
+// RollEntry.roller); `id` is the actor's peer id namespaced with the card's own
+// move id — globally unique and stable, so an undo can strike the exact entry.
+// `undone` marks an entry the actor later reverted — it's struck, not removed.
+export type ActionEntry = {
+  id: string
+  actor: Player
+  move: LoggedMove
+  undone?: boolean
+}
+
 // Messages exchanged between peers over the data channel.
 export type Message =
   | { type: 'roll'; roller: Player } // client -> host: roll on my behalf, attributed to `roller`
@@ -25,3 +39,5 @@ export type Message =
   | { type: 'state'; dice: Die[]; history: RollEntry[] } // host -> clients: authoritative dice/history
   | { type: 'hello'; id: string; name: string; color: string } // client -> host: my identity + name + color
   | { type: 'roster'; players: Player[] } // host -> clients: who's in the room
+  | { type: 'action'; actor: Player; event: MoveEvent } // client -> host: a scorecard move or undo
+  | { type: 'actions'; actions: ActionEntry[] } // host -> clients: the shared activity log

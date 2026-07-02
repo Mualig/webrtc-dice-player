@@ -80,27 +80,42 @@ export function emptyMarks(): ScoreMarks {
   }
 }
 
+// One scoring move a player made. Kept as an ordered log so the latest move can
+// be undone (crosses are otherwise permanent — see canMark) and, later, so each
+// player's moves can be tracked and synced. A `mark` crosses off a cell; a
+// `penalty` records the penalty count *before* the change so Undo can restore it.
+export type CardAction =
+  | { type: 'mark'; color: RowColor; index: number }
+  | { type: 'penalty'; previous: number }
+
+// A scorecard move as broadcast to the other players for the shared activity
+// feed. Distinct from CardAction (the local undo log) in payload, not shape: a
+// `penalty` records whether it was added or cleared (rather than the previous
+// count Undo needs), and there is a first-class `undo` describing a reversal.
+// A move that appears as its own feed entry: crossing off a cell, or a penalty
+// (recording whether it was added or cleared, for display).
+export type LoggedMove =
+  | { type: 'mark'; color: RowColor; index: number }
+  | { type: 'penalty'; filled: boolean }
+
+// What the scorecard reports for each player action (via <Scorecard onMove>).
+// A `move` carries a stable per-card id; an `undo` names the id of the move it
+// reverts, so the shared feed strikes that exact entry rather than guessing by
+// recency. The app namespaces the id with the actor's peer id for global uniqueness.
+export type MoveEvent =
+  | { type: 'move'; id: number; move: LoggedMove }
+  | { type: 'undo'; id: number }
+
 // Whether the given position may be crossed off right now, per Qwixx rules:
 // only to the right of the last existing cross, and the locking number needs
-// LOCK_THRESHOLD earlier crosses first.
+// LOCK_THRESHOLD earlier crosses first. Crossing off is permanent — a mistake is
+// reversed with Undo, not by clicking the cell again.
 export function canMark(row: boolean[], index: number): boolean {
   if (row[index]) return false
   const rightmost = row.lastIndexOf(true)
   if (index <= rightmost) return false
   if (index === LAST && countMarks(row) < LOCK_THRESHOLD) return false
   return true
-}
-
-// Only the rightmost cross can be taken back, which keeps the left-to-right
-// invariant intact.
-export function canUnmark(row: boolean[], index: number): boolean {
-  return row[index] && index === row.lastIndexOf(true)
-}
-
-// A cell is interactive when it can be either crossed off or taken back — the
-// single predicate the UI uses for both hit-testing and disabled state.
-export function canToggle(row: boolean[], index: number): boolean {
-  return canMark(row, index) || canUnmark(row, index)
 }
 
 export function isLocked(row: boolean[]): boolean {
@@ -116,4 +131,10 @@ export function countMarks(row: boolean[]): number {
 export function rowScore(row: boolean[]): number {
   const crosses = countMarks(row) + (isLocked(row) ? 1 : 0)
   return ROW_POINTS[crosses]
+}
+
+// The number printed at a given position of a colored row (red/yellow ascend
+// 2→12, green/blue descend 12→2) — used to describe a move in the activity feed.
+export function cellNumber(color: RowColor, index: number): number {
+  return SCORE_ROWS.find((r) => r.color === color)!.numbers[index]
 }

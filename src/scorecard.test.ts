@@ -8,8 +8,7 @@ import {
   ROW_POINTS,
   SCORE_ROWS,
   canMark,
-  canToggle,
-  canUnmark,
+  cellNumber,
   countMarks,
   emptyMarks,
   isLocked,
@@ -101,27 +100,11 @@ describe('canMark', () => {
   })
 })
 
-describe('canUnmark', () => {
-  it('only takes back the rightmost cross', () => {
-    const row = rowWith(3, 7)
-    expect(canUnmark(row, 7)).toBe(true)
-    expect(canUnmark(row, 3)).toBe(false) // not the rightmost
-  })
-
-  it('cannot take back a cell that is not crossed', () => {
-    expect(canUnmark(rowWith(3, 7), 5)).toBe(false)
-    expect(canUnmark(emptyMarks().red, 0)).toBe(false)
-  })
-})
-
-describe('canToggle', () => {
-  it('is exactly canMark OR canUnmark for every cell', () => {
-    const rows = [emptyMarks().red, rowWith(5), rowWith(0, 1, 2, 3, 4), rowWith(3, 7), rowWith(0, 1, 2, 3, 4, LAST)]
-    for (const row of rows) {
-      for (let i = 0; i < ROW_LENGTH; i++) {
-        expect(canToggle(row, i)).toBe(canMark(row, i) || canUnmark(row, i))
-      }
-    }
+describe('crossing off is permanent', () => {
+  it('never re-opens an already-crossed cell (no take-back — Undo handles that)', () => {
+    // Once a cell is crossed, canMark stays false for it regardless of position.
+    expect(canMark(rowWith(3, 7), 7)).toBe(false) // the rightmost cross
+    expect(canMark(rowWith(3, 7), 3)).toBe(false) // an earlier cross
   })
 })
 
@@ -155,5 +138,14 @@ describe('rowScore', () => {
   it('scores a fully crossed, locked row as the maximum 78', () => {
     const full = Array(ROW_LENGTH).fill(true)
     expect(rowScore(full)).toBe(78) // 11 crosses + lock = 12 → 78
+  })
+})
+
+describe('cellNumber', () => {
+  it('maps a row position to its printed number', () => {
+    expect(cellNumber('red', 0)).toBe(2) // red/yellow ascend 2→12
+    expect(cellNumber('yellow', LAST)).toBe(12)
+    expect(cellNumber('blue', 0)).toBe(12) // green/blue descend 12→2
+    expect(cellNumber('green', LAST)).toBe(2)
   })
 })

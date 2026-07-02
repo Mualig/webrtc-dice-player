@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePeerSync } from './usePeerSync'
-import type { Die, Message, Player, RollEntry } from './types'
+import type { ActionEntry, Die, Message, Player, RollEntry } from './types'
+import type { MoveEvent } from './scorecard'
 import { DICE, PLAYER_COLOR_PALETTE, rollValue } from './dice'
 import { Dice } from './components/Dice'
 import { HistoryEntry } from './components/History'
 import { ConnectionPanel } from './components/ConnectionPanel'
 import { SidePanel } from './components/SidePanel'
 import { Scorecard } from './components/Scorecard'
+import { ActivityFeed } from './components/ActivityFeed'
+
+// The activity feed keeps only the most recent moves so the log — and the
+// message that broadcasts it — stays bounded over a long game.
+const MAX_ACTIVITY = 50
 
 const NAME_KEY = 'webrtc-dice-player-player-name'
 const COLOR_KEY = 'webrtc-dice-player-player-color'
@@ -23,6 +29,14 @@ function upsertPlayer(list: Player[], id: string, name: string, color: string): 
     : [...list, { id, name, color }]
 }
 
+// Mark the entry with the given id as undone (struck, not removed). No-op if it
+// isn't in the log — e.g. it already scrolled past MAX_ACTIVITY — so an undo can
+// never strike the wrong row.
+function strikeById(actions: ActionEntry[], id: string): ActionEntry[] {
+  const i = actions.findIndex((a) => a.id === id)
+  return i === -1 ? actions : actions.map((a, idx) => (idx === i ? { ...a, undone: true } : a))
+}
+
 function App() {
   const [dice, setDice] = useState<Die[]>(() =>
     DICE.map((d) => ({ ...d, value: rollValue() })),
@@ -33,13 +47,17 @@ function App() {
   const [name, setName] = useState(() => localStorage.getItem(NAME_KEY) ?? '')
   const [color, setColor] = useState(() => localStorage.getItem(COLOR_KEY) ?? randomColor())
   const [players, setPlayers] = useState<Player[]>([])
+  const [actions, setActions] = useState<ActionEntry[]>([])
+  // Host-assigned id for the roll history (the host is its sole writer). Activity
+  // entries instead key off the mover's own stable move id (see applyMove).
   const nextId = useRef(1)
 
-  // Refs mirror the latest dice/history/roster so PeerJS event handlers and the
-  // delayed roll callback read current values instead of stale closures.
+  // Refs mirror the latest dice/history/roster/activity so PeerJS event handlers
+  // and the delayed roll callback read current values instead of stale closures.
   const diceRef = useRef(dice)
   const historyRef = useRef(history)
   const playersRef = useRef(players)
+  const actionsRef = useRef(actions)
 
   // `handleMessage`/`handleClientJoin`/`handleClientLeave` are hoisted and only
   // ever invoked after render (on a peer event), so passing them straight through
@@ -86,6 +104,38 @@ function App() {
     [role, send],
   )
 
+  // Commit the shared activity log locally; the host — authoritative for it,
+  // since clients only reach one another through the host — broadcasts it.
+  function applyActions(next: ActionEntry[]) {
+    actionsRef.current = next
+    setActions(next)
+    if (role === 'host') {
+      send({ type: 'actions', actions: next } satisfies Message)
+    }
+  }
+
+  // Host-only: apply a move event by `actor` to the shared log. Its entry id is
+  // the actor's peer id namespaced with the card's own move id — globally unique
+  // and stable — so an undo strikes that exact entry (no new row). Any other move
+  // is prepended, bounded to the most recent MAX_ACTIVITY.
+  function applyMove(actor: Player, event: MoveEvent) {
+    const id = `${actor.id}-${event.id}`
+    if (event.type === 'undo') {
+      applyActions(strikeById(actionsRef.current, id))
+      return
+    }
+    const entry: ActionEntry = { id, actor, move: event.move }
+    applyActions([entry, ...actionsRef.current].slice(0, MAX_ACTIVITY))
+  }
+
+  // A scorecard move we just made (from <Scorecard onMove>). The host applies it
+  // directly; a client forwards it for the host to apply and relay. Solo has no
+  // shared feed, so there is nothing to track.
+  function recordMove(event: MoveEvent) {
+    if (role === 'host') applyMove(me, event)
+    else if (role === 'client') send({ type: 'action', actor: me, event } satisfies Message)
+  }
+
   // Generate a roll locally and (if hosting) broadcast it. Only ever runs on
   // the authoritative peer — solo or host. `roller` attributes it to a player.
   function performRoll(roller: Player) {
@@ -124,6 +174,7 @@ function App() {
     if (role === 'host') {
       if (m.type === 'roll') performRoll(m.roller)
       else if (m.type === 'clear') clearHistory()
+      else if (m.type === 'action') applyMove(m.actor, m.event)
       else if (m.type === 'hello') {
         // We key the roster on the client's self-reported id, which PeerJS
         // guarantees equals the transport's `conn.peer` — so handleClientLeave
@@ -137,14 +188,18 @@ function App() {
         applyState(m.dice, m.history)
       } else if (m.type === 'roster') {
         updateRoster(m.players)
+      } else if (m.type === 'actions') {
+        applyActions(m.actions)
       }
     }
   }
 
-  // Host: bring a newly-connected client up to date with current state + roster.
+  // Host: bring a newly-connected client up to date with current state, roster
+  // and the shared activity log.
   function handleClientJoin() {
     send({ type: 'state', dice: diceRef.current, history: historyRef.current } satisfies Message)
     send({ type: 'roster', players: playersRef.current } satisfies Message)
+    send({ type: 'actions', actions: actionsRef.current } satisfies Message)
   }
 
   // Host: drop a disconnected client from the roster.
@@ -193,31 +248,34 @@ function App() {
     })
   }
 
-  // Reset presence when (re)starting or leaving a session, so stale players from
-  // a previous room never linger into the next one.
-  function resetRoster() {
+  // Reset presence and activity when (re)starting or leaving a session, so stale
+  // players or moves from a previous room never linger into the next one.
+  function resetSession() {
     playersRef.current = []
     setPlayers([])
+    actionsRef.current = []
+    setActions([])
   }
   function startHosting() {
-    resetRoster()
+    resetSession()
     createRoom()
   }
   function startJoining(code: string) {
-    resetRoster()
+    resetSession()
     joinRoom(code)
   }
   function leaveRoom() {
-    resetRoster()
+    resetSession()
     leave()
   }
 
-  // History rows follow each roller's *current* name + color: resolve the roller
-  // by id from the live roster (plus our own entry, applied instantly before the
-  // roster round-trips), falling back to the snapshot taken at roll time once a
-  // player has left the room.
+  // Attributed entries (rolls and activity) follow the player's *current* name +
+  // color: resolve by id from the live roster (plus our own entry, applied
+  // instantly before the roster round-trips), falling back to the snapshot taken
+  // at the time of the entry once that player has left the room.
   const playerById = new Map(players.map((p) => [p.id, p]))
   playerById.set(selfId, me)
+  const resolvePlayer = (snapshot: Player): Player => playerById.get(snapshot.id) ?? snapshot
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-10 bg-zinc-100 px-6 py-12">
@@ -268,7 +326,15 @@ function App() {
         </button>
       </div>
 
-      <Scorecard />
+      {/* The scorecard with the live activity feed beside it on wide screens, so
+          moves are visible without scrolling; they stack on narrower ones. */}
+      <div className="flex w-full max-w-7xl flex-col items-center gap-6 xl:flex-row xl:items-stretch xl:justify-center">
+        <Scorecard onMove={recordMove} />
+        {/* Shared feed of everyone's scorecard moves — only meaningful in a room. */}
+        {role !== 'solo' && (
+          <ActivityFeed actions={actions} resolveActor={resolvePlayer} />
+        )}
+      </div>
 
       <section className="w-full max-w-md">
         <div className="mb-3 flex items-center justify-between">
@@ -294,7 +360,7 @@ function App() {
                 key={entry.id}
                 entry={entry}
                 label={history.length - index}
-                roller={playerById.get(entry.roller.id) ?? entry.roller}
+                roller={resolvePlayer(entry.roller)}
               />
             ))}
           </ul>

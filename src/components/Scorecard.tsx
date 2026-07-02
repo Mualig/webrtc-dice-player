@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   LAST,
   LOCK_THRESHOLD,
@@ -7,18 +7,27 @@ import {
   ROW_LENGTH,
   ROW_STYLES,
   SCORE_ROWS,
-  canToggle,
+  canMark,
   countMarks,
   emptyMarks,
   isLocked,
   rowScore,
+  type CardAction,
+  type MoveEvent,
   type RowColor,
   type ScoreMarks,
 } from '../scorecard'
 
 const STORAGE_KEY = 'webrtc-dice-player-scorecard'
 
-type CardState = { marks: ScoreMarks; penalties: number }
+// A move in the local undo log: its stable `id` (so undo can name the exact feed
+// entry it reverts) plus the `action` describing how to revert it.
+type LoggedAction = { id: number; action: CardAction }
+
+// `history` is the ordered log of moves this session, newest last; Undo pops it.
+// It is deliberately not persisted — only the resulting marks/penalties are (see
+// the effect below) — so Undo is scoped to the current session.
+type CardState = { marks: ScoreMarks; penalties: number; history: LoggedAction[] }
 
 // Restore a saved card, tolerating anything malformed in storage.
 function loadState(): CardState {
@@ -30,9 +39,9 @@ function loadState(): CardState {
       if (Array.isArray(saved) && saved.length === ROW_LENGTH) marks[color] = saved.map(Boolean)
     }
     const penalties = Math.min(MAX_PENALTIES, Math.max(0, Math.floor(Number(parsed?.penalties)) || 0))
-    return { marks, penalties }
+    return { marks, penalties, history: [] }
   } catch {
-    return { marks: emptyMarks(), penalties: 0 }
+    return { marks: emptyMarks(), penalties: 0, history: [] }
   }
 }
 
@@ -84,28 +93,28 @@ function Row({
   color,
   numbers,
   row,
-  onToggle,
+  onMark,
 }: Readonly<{
   color: RowColor
   numbers: number[]
   row: boolean[]
-  onToggle: (color: RowColor, index: number) => void
+  onMark: (color: RowColor, index: number) => void
 }>) {
   const style = ROW_STYLES[color]
   const locked = isLocked(row)
-  const lockActive = canToggle(row, LAST)
+  const lockActive = canMark(row, LAST)
 
   return (
     <div className={`flex items-center gap-1.5 rounded-xl p-1.5 ${style.bar}`}>
       <DirectionArrow />
       {numbers.map((n, i) => {
         const marked = row[i]
-        const interactive = canToggle(row, i)
+        const interactive = canMark(row, i)
         return (
           <button
             key={i}
             type="button"
-            onClick={() => onToggle(color, i)}
+            onClick={() => onMark(color, i)}
             disabled={!interactive}
             aria-pressed={marked}
             aria-label={`${color} ${n}${marked ? ', crossed off' : ''}`}
@@ -120,7 +129,7 @@ function Row({
       })}
       <button
         type="button"
-        onClick={() => onToggle(color, LAST)}
+        onClick={() => onMark(color, LAST)}
         disabled={!lockActive}
         aria-label={`Lock ${color} row`}
         title={`Lock this row (needs at least ${LOCK_THRESHOLD} crosses)`}
@@ -148,58 +157,106 @@ function ScoreBox({ value, className }: Readonly<{ value: number; className: str
 // The player's own Qwixx scorecard: click numbers to cross them off (left to
 // right only), cross the lock once a row has at least 5 X's, and tally penalties.
 // Scores update live. State is local to this player and saved to localStorage.
-export function Scorecard() {
+// Each move is also reported via `onMove` so the app can broadcast it to the
+// other players' activity feeds — the card itself stays room-agnostic.
+export function Scorecard({ onMove }: Readonly<{ onMove?: (event: MoveEvent) => void }>) {
   const [card, setCard] = useState<CardState>(loadState)
+  // Monotonic id stamped on each move so undo can name the exact move it reverts.
+  const nextMoveId = useRef(0)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(card))
+    // Persist the scored state only; the move log is session-scoped (see CardState).
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ marks: card.marks, penalties: card.penalties }))
   }, [card])
 
-  function toggle(color: RowColor, index: number) {
+  // Handlers guard against no-ops on the *current* state (each click is its own
+  // event, so `card` is up to date) and report the move only when one happened.
+  // onMove fires outside the setCard updater so the updater stays side-effect free.
+  function mark(color: RowColor, index: number) {
+    if (!canMark(card.marks[color], index)) return
+    // One payload serves both the local revert (CardAction) and the broadcast
+    // (LoggedMove) — the `mark` variant is identical in both.
+    const move = { type: 'mark' as const, color, index }
+    const id = nextMoveId.current++
     setCard((prev) => {
-      const row = prev.marks[color]
-      if (!canToggle(row, index)) return prev
-      const nextRow = row.slice()
-      nextRow[index] = !nextRow[index]
-      return { ...prev, marks: { ...prev.marks, [color]: nextRow } }
+      const nextRow = prev.marks[color].slice()
+      nextRow[index] = true
+      return { ...prev, marks: { ...prev.marks, [color]: nextRow }, history: [...prev.history, { id, action: move }] }
     })
+    onMove?.({ type: 'move', id, move })
   }
 
   function togglePenalty(index: number) {
-    // Clicking a box fills up to it, or clears it and everything after.
-    setCard((prev) => ({ ...prev, penalties: index < prev.penalties ? index : index + 1 }))
+    // Clicking a box fills up to it, or clears it and everything after. Decide
+    // the new count once (each click is its own event, so `card` is current).
+    const next = index < card.penalties ? index : index + 1
+    const id = nextMoveId.current++
+    setCard((prev) => ({
+      ...prev,
+      penalties: next,
+      history: [...prev.history, { id, action: { type: 'penalty', previous: prev.penalties } }],
+    }))
+    onMove?.({ type: 'move', id, move: { type: 'penalty', filled: next > card.penalties } })
+  }
+
+  // Revert the most recent move, drop it from the log, and name its id so the
+  // shared feed strikes that exact entry.
+  function undo() {
+    const last = card.history[card.history.length - 1]
+    if (!last) return
+    setCard((prev) => {
+      const history = prev.history.slice()
+      const { action } = history.pop()!
+      if (action.type === 'penalty') return { ...prev, penalties: action.previous, history }
+      const nextRow = prev.marks[action.color].slice()
+      nextRow[action.index] = false
+      return { ...prev, marks: { ...prev.marks, [action.color]: nextRow }, history }
+    })
+    onMove?.({ type: 'undo', id: last.id })
   }
 
   function reset() {
-    setCard({ marks: emptyMarks(), penalties: 0 })
+    setCard({ marks: emptyMarks(), penalties: 0, history: [] })
   }
 
   const scores = SCORE_ROWS.map((r) => rowScore(card.marks[r.color]))
   const penaltyTotal = card.penalties * PENALTY_VALUE
   const grandTotal = scores.reduce((a, b) => a + b, 0) - penaltyTotal
   const anyMarks = SCORE_ROWS.some((r) => countMarks(card.marks[r.color]) > 0) || card.penalties > 0
+  const canUndo = card.history.length > 0
 
   return (
     <section className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-lg">
-      <header className="mb-4 flex items-center justify-between">
+      <header className="mb-4 flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold tracking-tight text-zinc-900">Qwixx scorecard</h2>
           <p className="text-xs text-zinc-400">{`Cross off numbers left to right · lock a row after ${LOCK_THRESHOLD} X’s`}</p>
         </div>
-        <button
-          type="button"
-          onClick={reset}
-          disabled={!anyMarks}
-          className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 disabled:opacity-40"
-        >
-          Reset card
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo the last move"
+            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:opacity-40"
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            onClick={reset}
+            disabled={!anyMarks}
+            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 disabled:opacity-40"
+          >
+            Reset card
+          </button>
+        </div>
       </header>
 
       <div className="overflow-x-auto pb-1">
         <div className="flex min-w-max flex-col gap-2">
           {SCORE_ROWS.map(({ color, numbers }) => (
-            <Row key={color} color={color} numbers={numbers} row={card.marks[color]} onToggle={toggle} />
+            <Row key={color} color={color} numbers={numbers} row={card.marks[color]} onMark={mark} />
           ))}
         </div>
       </div>

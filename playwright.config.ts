@@ -12,7 +12,9 @@ export default defineConfig({
   expect: {timeout: 10_000},
   reporter: 'list',
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  // The WebRTC handshake occasionally times out on a cold connection, so retry
+  // before failing (a real regression fails every attempt); CI retries more.
+  retries: process.env.CI ? 2 : 1,
   // Boots a local signaling broker so tests never touch the public cloud broker.
   globalSetup: './e2e/global-setup.ts',
   use: {

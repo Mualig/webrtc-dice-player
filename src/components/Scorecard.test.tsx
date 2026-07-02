@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Scorecard } from './Scorecard'
@@ -25,7 +25,8 @@ describe('<Scorecard />', () => {
     expect(cell('red 2')).toBeInTheDocument()
     expect(cell('blue 12')).toBeInTheDocument()
     expect(totals()).toEqual({ red: 0, yellow: 0, green: 0, blue: 0, penalty: 0, grand: 0 })
-    expect(screen.getByRole('button', { name: 'Reset card' })).toBeDisabled()
+    expect(cell('Reset card')).toBeDisabled()
+    expect(cell('Undo')).toBeDisabled()
   })
 
   it('crosses off a number and updates its state and the total', async () => {
@@ -50,27 +51,76 @@ describe('<Scorecard />', () => {
     expect(cell('red 9')).toBeEnabled() // to the right — still open
   })
 
-  it('takes back the most recent cross when clicked again', async () => {
+  it('does not take back a cross when the crossed cell is clicked again', async () => {
     const user = userEvent.setup()
     render(<Scorecard />)
 
     await user.click(cell('red 7'))
-    await user.click(cell('red 7, crossed off'))
+    const crossed = cell('red 7, crossed off')
+    expect(crossed).toBeDisabled() // crossing off is permanent
+    await user.click(crossed) // no-op
+
+    expect(cell('red 7, crossed off')).toHaveAttribute('aria-pressed', 'true')
+    expect(totals().grand).toBe(1)
+  })
+
+  it('undoes the most recent cross with the Undo button', async () => {
+    const user = userEvent.setup()
+    render(<Scorecard />)
+
+    await user.click(cell('red 7'))
+    expect(totals().grand).toBe(1)
+    expect(cell('Undo')).toBeEnabled()
+
+    await user.click(cell('Undo'))
 
     expect(cell('red 7')).toHaveAttribute('aria-pressed', 'false')
     expect(totals().grand).toBe(0)
+    expect(cell('Undo')).toBeDisabled() // nothing left to undo
+  })
+
+  it('undoes moves newest-first, penalties included', async () => {
+    const user = userEvent.setup()
+    render(<Scorecard />)
+
+    await user.click(cell('red 7')) // +1
+    await user.click(cell('Penalty 1')) // −5
+    expect(totals().grand).toBe(-4)
+
+    await user.click(cell('Undo')) // reverts the penalty first
+    expect(cell('Penalty 1')).toHaveAttribute('aria-pressed', 'false')
+    expect(totals().grand).toBe(1)
+
+    await user.click(cell('Undo')) // then the cross
+    expect(cell('red 7')).toHaveAttribute('aria-pressed', 'false')
+    expect(totals().grand).toBe(0)
+    expect(cell('Undo')).toBeDisabled()
+  })
+
+  it('re-opens the cells to the right after undoing a cross', async () => {
+    const user = userEvent.setup()
+    render(<Scorecard />)
+
+    await user.click(cell('red 7')) // index 5
+    await user.click(cell('red 9')) // index 7
+    expect(cell('red 8')).toBeDisabled() // skipped over — locked out between the two crosses
+
+    await user.click(cell('Undo')) // undo red 9
+
+    expect(cell('red 8')).toBeEnabled() // to the right of the rightmost cross again
+    expect(cell('red 9')).toBeEnabled()
   })
 
   it('keeps the lock disabled until five crosses, then locks the row for 28', async () => {
     const user = userEvent.setup()
     render(<Scorecard />)
 
-    expect(screen.getByRole('button', { name: 'Lock red row' })).toBeDisabled()
+    expect(cell('Lock red row')).toBeDisabled()
 
     for (const n of [2, 3, 4, 5, 6]) await user.click(cell(`red ${n}`))
-    expect(screen.getByRole('button', { name: 'Lock red row' })).toBeEnabled()
+    expect(cell('Lock red row')).toBeEnabled()
 
-    await user.click(screen.getByRole('button', { name: 'Lock red row' }))
+    await user.click(cell('Lock red row'))
 
     // Crossing the final number locks the row; the lock counts as an extra
     // cross: 5 + the 12 + the lock = 7 X's = 28 points.
@@ -84,11 +134,11 @@ describe('<Scorecard />', () => {
     render(<Scorecard />)
 
     // Clicking the 3rd box fills up to three penalties = −15.
-    await user.click(screen.getByRole('button', { name: 'Penalty 3' }))
+    await user.click(cell('Penalty 3'))
     expect(totals()).toMatchObject({ penalty: 15, grand: -15 })
 
     // Clicking the 1st box clears it and everything after it.
-    await user.click(screen.getByRole('button', { name: 'Penalty 1' }))
+    await user.click(cell('Penalty 1'))
     expect(totals()).toMatchObject({ penalty: 0, grand: 0 })
   })
 
@@ -108,11 +158,61 @@ describe('<Scorecard />', () => {
     render(<Scorecard />)
 
     await user.click(cell('red 7'))
-    await user.click(screen.getByRole('button', { name: 'Penalty 1' }))
-    await user.click(screen.getByRole('button', { name: 'Reset card' }))
+    await user.click(cell('Penalty 1'))
+    await user.click(cell('Reset card'))
 
     expect(cell('red 7')).toHaveAttribute('aria-pressed', 'false')
     expect(totals().grand).toBe(0)
-    expect(screen.getByRole('button', { name: 'Reset card' })).toBeDisabled()
+    expect(cell('Reset card')).toBeDisabled()
+  })
+
+  it('reports each move to onMove for broadcasting', async () => {
+    const user = userEvent.setup()
+    const onMove = vi.fn()
+    render(<Scorecard onMove={onMove} />)
+
+    // Each move carries a stable, incrementing id; undo names the id it reverts.
+    await user.click(cell('red 7')) // red index 5 → id 0
+    expect(onMove).toHaveBeenLastCalledWith({ type: 'move', id: 0, move: { type: 'mark', color: 'red', index: 5 } })
+
+    await user.click(cell('Penalty 1')) // id 1
+    expect(onMove).toHaveBeenLastCalledWith({ type: 'move', id: 1, move: { type: 'penalty', filled: true } })
+
+    await user.click(cell('Undo')) // reverts the penalty (id 1)
+    expect(onMove).toHaveBeenLastCalledWith({ type: 'undo', id: 1 })
+
+    expect(onMove).toHaveBeenCalledTimes(3)
+  })
+
+  it('reports locking a row as a mark on the final number', async () => {
+    const user = userEvent.setup()
+    const onMove = vi.fn()
+    render(<Scorecard onMove={onMove} />)
+
+    for (const n of [2, 3, 4, 5, 6]) await user.click(cell(`red ${n}`))
+    onMove.mockClear()
+    await user.click(cell('Lock red row'))
+
+    // The lock is a mark on the final index; the id is whatever the counter is at.
+    expect(onMove).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'move', move: { type: 'mark', color: 'red', index: 10 } }), // LAST
+    )
+  })
+
+  it('does not report no-op interactions', async () => {
+    const user = userEvent.setup()
+    const onMove = vi.fn()
+    render(<Scorecard onMove={onMove} />)
+
+    await user.click(cell('red 7'))
+    onMove.mockClear()
+
+    // A crossed cell and cells to its left are disabled — clicking dispatches
+    // nothing — and Reset is not a tracked move.
+    await user.click(cell('red 7, crossed off'))
+    await user.click(cell('red 4'))
+    await user.click(cell('Reset card'))
+
+    expect(onMove).not.toHaveBeenCalled()
   })
 })
