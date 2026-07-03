@@ -148,8 +148,31 @@ export function cardTotals(marks: ScoreMarks, penalties: number): ScoreTotals {
   return { rows, penaltyTotal, total: rows.reduce((a, b) => a + b, 0) - penaltyTotal }
 }
 
-// A blank card's totals — the default for a player who hasn't reported yet.
-export const EMPTY_TOTALS: ScoreTotals = cardTotals(emptyMarks(), 0)
+// The colors this card has locked (their final number crossed), in SCORE_ROWS
+// order. A locked color is out of play for the whole room — its die stops rolling
+// and no one may mark that row — so the app unions this across every player.
+export function lockedColors(marks: ScoreMarks): RowColor[] {
+  return SCORE_ROWS.filter((r) => isLocked(marks[r.color])).map((r) => r.color)
+}
+
+// A player's public card state, shared with the room: their score breakdown and
+// the colors they've locked. The host keeps one per player and broadcasts them.
+export type CardSummary = { totals: ScoreTotals; locked: RowColor[] }
+
+export function cardSummary(marks: ScoreMarks, penalties: number): CardSummary {
+  return { totals: cardTotals(marks, penalties), locked: lockedColors(marks) }
+}
+
+// A blank card's summary — the default for a player who hasn't reported yet.
+export const EMPTY_SUMMARY: CardSummary = cardSummary(emptyMarks(), 0)
+
+// The colors locked by *anyone* in the room — the union over every player's
+// summary. A color in this set is out of play for everyone (its die stops rolling
+// and its row is closed). Distinct from lockedColors(marks), which is a single
+// card's own locked colors.
+export function lockedAcross(summaries: Record<string, CardSummary>): RowColor[] {
+  return [...new Set(Object.values(summaries).flatMap((s) => s.locked))]
+}
 
 // The number printed at a given position of a colored row (red/yellow ascend
 // 2→12, green/blue descend 12→2) — used to describe a move in the activity feed.

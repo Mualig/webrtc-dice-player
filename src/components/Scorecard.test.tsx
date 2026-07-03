@@ -215,6 +215,17 @@ describe('<Scorecard />', () => {
     )
   })
 
+  it('closes a row that another player has locked', () => {
+    // `lockedColors` marks colors locked by anyone in the room: that row's cells
+    // and its lock are disabled here, while other rows stay open.
+    render(<Scorecard lockedColors={['red']} />)
+
+    expect(cell('red 2')).toBeDisabled()
+    expect(cell('red 12')).toBeDisabled()
+    expect(cell('Lock red row')).toBeDisabled()
+    expect(cell('yellow 2')).toBeEnabled() // an unlocked color is unaffected
+  })
+
   it('does not report no-op interactions', async () => {
     const user = userEvent.setup()
     const onMove = vi.fn()

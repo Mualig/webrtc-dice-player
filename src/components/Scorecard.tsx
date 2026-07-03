@@ -8,15 +8,15 @@ import {
   ROW_STYLES,
   SCORE_ROWS,
   canMark,
-  cardTotals,
+  cardSummary,
   countMarks,
   emptyMarks,
   isLocked,
   type CardAction,
+  type CardSummary,
   type MoveEvent,
   type RowColor,
   type ScoreMarks,
-  type ScoreTotals,
 } from '../scorecard'
 import { TotalsRow } from './TotalsRow'
 
@@ -96,22 +96,26 @@ function Row({
   numbers,
   row,
   onMark,
+  closed = false,
 }: Readonly<{
   color: RowColor
   numbers: number[]
   row: boolean[]
   onMark: (color: RowColor, index: number) => void
+  // True when this color is locked by *anyone* in the room — the row is out of
+  // play for everyone, so every cell (and the lock) is disabled.
+  closed?: boolean
 }>) {
   const style = ROW_STYLES[color]
   const locked = isLocked(row)
-  const lockActive = canMark(row, LAST)
+  const lockActive = !closed && canMark(row, LAST)
 
   return (
     <div className={`flex items-center gap-1.5 rounded-xl p-1.5 ${style.bar}`}>
       <DirectionArrow />
       {numbers.map((n, i) => {
         const marked = row[i]
-        const interactive = canMark(row, i)
+        const interactive = !closed && canMark(row, i)
         return (
           <button
             key={i}
@@ -140,7 +144,7 @@ function Row({
         }`}
       >
         <LockIcon />
-        {locked && <Cross className="text-white" />}
+        {(locked || closed) && <Cross className="text-white" />}
       </button>
     </div>
   )
@@ -153,8 +157,14 @@ function Row({
 // other players' activity feeds — the card itself stays room-agnostic.
 export function Scorecard({
   onMove,
-  onScore,
-}: Readonly<{ onMove?: (event: MoveEvent) => void; onScore?: (totals: ScoreTotals) => void }>) {
+  onReport,
+  lockedColors = [],
+}: Readonly<{
+  onMove?: (event: MoveEvent) => void
+  onReport?: (summary: CardSummary) => void
+  // Colors locked by anyone in the room — those rows are closed for this card too.
+  lockedColors?: RowColor[]
+}>) {
   const [card, setCard] = useState<CardState>(loadState)
   // Monotonic id stamped on each move so undo can name the exact move it reverts.
   const nextMoveId = useRef(0)
@@ -180,7 +190,9 @@ export function Scorecard({
   // event, so `card` is up to date) and report the move only when one happened.
   // onMove fires outside the setCard updater so the updater stays side-effect free.
   function mark(color: RowColor, index: number) {
-    if (!canMark(card.marks[color], index)) return
+    // Guard the same rule the button enforces: nothing is dispatched for a cell
+    // whose color is closed (locked by anyone) or that isn't markable right now.
+    if (lockedColors.includes(color) || !canMark(card.marks[color], index)) return
     // One payload serves both the local revert (CardAction) and the broadcast
     // (LoggedMove) — the `mark` variant is identical in both.
     const move = { type: 'mark' as const, color, index }
@@ -229,14 +241,15 @@ export function Scorecard({
 
   // Memoized so it's computed once per card change and has a stable identity the
   // report effect below can depend on (a fresh object would fire it every render).
-  const totals = useMemo(() => cardTotals(card.marks, card.penalties), [card])
+  const summary = useMemo(() => cardSummary(card.marks, card.penalties), [card])
   const anyMarks = SCORE_ROWS.some((r) => countMarks(card.marks[r.color]) > 0) || card.penalties > 0
   const canUndo = card.history.length > 0
 
-  // Report our running totals so the app can share them in the other-players board.
+  // Report our summary (score breakdown + locked colors) so the app can share it
+  // with the room — driving the other-players board and the shared row/dice locks.
   useEffect(() => {
-    onScore?.(totals)
-  }, [totals, onScore])
+    onReport?.(summary)
+  }, [summary, onReport])
 
   return (
     <section className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-lg">
@@ -303,7 +316,14 @@ export function Scorecard({
             → cells → lock) — not stretched to fill a wider card — and centers it. */}
         <div className="flex min-w-max flex-col items-center gap-2">
           {SCORE_ROWS.map(({ color, numbers }) => (
-            <Row key={color} color={color} numbers={numbers} row={card.marks[color]} onMark={mark} />
+            <Row
+              key={color}
+              color={color}
+              numbers={numbers}
+              row={card.marks[color]}
+              onMark={mark}
+              closed={lockedColors.includes(color)}
+            />
           ))}
         </div>
       </div>
@@ -334,7 +354,7 @@ export function Scorecard({
       {/* Totals: red + yellow + green + blue − penalties = grand total. */}
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-4">
         <span className="mr-1 text-sm font-semibold text-zinc-600">Totals</span>
-        <TotalsRow totals={totals} />
+        <TotalsRow totals={summary.totals} />
       </div>
     </section>
   )

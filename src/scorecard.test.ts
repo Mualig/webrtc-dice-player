@@ -8,10 +8,12 @@ import {
   ROW_POINTS,
   SCORE_ROWS,
   canMark,
+  cardSummary,
   cellNumber,
   countMarks,
   emptyMarks,
   isLocked,
+  lockedColors,
   rowScore,
 } from './scorecard'
 
@@ -138,6 +140,32 @@ describe('rowScore', () => {
   it('scores a fully crossed, locked row as the maximum 78', () => {
     const full = Array(ROW_LENGTH).fill(true)
     expect(rowScore(full)).toBe(78) // 11 crosses + lock = 12 → 78
+  })
+})
+
+describe('lockedColors', () => {
+  it('is empty for a blank card', () => {
+    expect(lockedColors(emptyMarks())).toEqual([])
+  })
+
+  it('lists only the colors whose final number is crossed, in SCORE_ROWS order', () => {
+    const marks = emptyMarks()
+    marks.red = rowWith(0, 1, 2, 3, 4, LAST) // red locked (5 crosses + the lock)
+    marks.green[LAST] = true // green locked
+    expect(lockedColors(marks)).toEqual(['red', 'green'])
+  })
+})
+
+describe('cardSummary', () => {
+  it('bundles the score breakdown with the locked colors', () => {
+    const marks = emptyMarks()
+    marks.red = rowWith(0, 1, 2, 3, 4, LAST) // locked red → 28
+    const summary = cardSummary(marks, 1) // one penalty → −5
+
+    expect(summary.locked).toEqual(['red'])
+    expect(summary.totals.rows[0]).toBe(28) // red row score
+    expect(summary.totals.penaltyTotal).toBe(PENALTY_VALUE)
+    expect(summary.totals.total).toBe(28 - PENALTY_VALUE)
   })
 })
 

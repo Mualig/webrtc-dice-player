@@ -1,26 +1,26 @@
 import type { Player } from '../types'
-import { EMPTY_TOTALS, type ScoreTotals } from '../scorecard'
+import { EMPTY_SUMMARY, type CardSummary } from '../scorecard'
 import { displayName } from '../format'
 import { TotalsRow } from './TotalsRow'
 
 // A card showing the other players in the room and their live score breakdowns
 // (highest total first), each rendered like the scorecard's own Totals line. Your
-// own score lives on your scorecard, so it's excluded here. `scores` maps player
-// id → breakdown; a player with nothing reported yet reads as a blank card.
+// own score lives on your scorecard, so it's excluded here. `summaries` maps player
+// id → card summary; a player with nothing reported yet reads as a blank card.
 export function ScoreBoard({
   players,
-  scores,
+  summaries,
   selfId,
   className = '',
 }: Readonly<{
   players: Player[]
-  scores: Record<string, ScoreTotals>
+  summaries: Record<string, CardSummary>
   selfId: string
   className?: string
 }>) {
   const others = players
     .filter((p) => p.id !== selfId)
-    .map((p) => ({ player: p, totals: scores[p.id] ?? EMPTY_TOTALS }))
+    .map((p) => ({ player: p, totals: (summaries[p.id] ?? EMPTY_SUMMARY).totals }))
     .sort((a, b) => b.totals.total - a.totals.total)
 
   return (

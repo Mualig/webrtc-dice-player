@@ -110,3 +110,25 @@ test("scorecard moves appear in each player's activity feed", async ({ browser }
   await expect(activity(client).first()).toHaveClass(/line-through/)
   await expect(activity(host).first()).toHaveClass(/line-through/)
 })
+
+test('locking a row takes that color out of play for everyone', async ({ browser }) => {
+  const { host, client } = await connectHostAndClient(browser)
+
+  // Host locks red: five crosses satisfy the threshold, then cross the lock.
+  for (const n of [2, 3, 4, 5, 6]) await host.getByRole('button', { name: `red ${n}` }).click()
+  await host.getByRole('button', { name: 'Lock red row' }).click()
+
+  // The client's own red row is now closed — its cells and lock are disabled —
+  // even though the client never touched red.
+  await expect(client.getByRole('button', { name: 'red 9' })).toBeDisabled()
+  await expect(client.getByRole('button', { name: 'Lock red row' })).toBeDisabled()
+
+  // The red die is out of play (greyed + labelled) on both peers.
+  await expect(client.getByText('red · locked')).toBeVisible()
+  await expect(host.getByText('red · locked')).toBeVisible()
+
+  // Undoing the lock re-opens the color everywhere.
+  await host.getByRole('button', { name: 'Undo' }).click()
+  await expect(client.getByRole('button', { name: 'red 9' })).toBeEnabled()
+  await expect(client.getByText('red · locked')).toHaveCount(0)
+})

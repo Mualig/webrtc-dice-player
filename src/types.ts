@@ -1,4 +1,4 @@
-import type { LoggedMove, MoveEvent, ScoreTotals } from './scorecard'
+import type { CardSummary, LoggedMove, MoveEvent } from './scorecard'
 
 export type DiceColor = 'white' | 'red' | 'yellow' | 'green' | 'blue'
 
@@ -41,5 +41,5 @@ export type Message =
   | { type: 'roster'; players: Player[] } // host -> clients: who's in the room
   | { type: 'action'; actor: Player; event: MoveEvent } // client -> host: a scorecard move or undo
   | { type: 'actions'; actions: ActionEntry[] } // host -> clients: the shared activity log
-  | { type: 'score'; id: string; totals: ScoreTotals } // client -> host: my scorecard breakdown
-  | { type: 'scores'; scores: Record<string, ScoreTotals> } // host -> clients: every player's breakdown, by id
+  | { type: 'score'; id: string; summary: CardSummary } // client -> host: my card summary (breakdown + locks)
+  | { type: 'scores'; scores: Record<string, CardSummary> } // host -> clients: every player's summary, by id

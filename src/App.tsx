@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePeerSync } from './usePeerSync'
 import type { ActionEntry, Die, Message, Player, RollEntry } from './types'
-import { EMPTY_TOTALS, type MoveEvent, type ScoreTotals } from './scorecard'
+import { EMPTY_SUMMARY, lockedAcross, type CardSummary, type MoveEvent } from './scorecard'
 import { DICE, PLAYER_COLOR_PALETTE, rollValue } from './dice'
 import { Dice } from './components/Dice'
 import { HistoryEntry } from './components/History'
@@ -49,10 +49,11 @@ function App() {
   const [color, setColor] = useState(() => localStorage.getItem(COLOR_KEY) ?? randomColor())
   const [players, setPlayers] = useState<Player[]>([])
   const [actions, setActions] = useState<ActionEntry[]>([])
-  // Our own scorecard breakdown (reported by <Scorecard onScore>), and every
-  // player's breakdown keyed by peer id (the host aggregates and broadcasts this).
-  const [myTotals, setMyTotals] = useState(EMPTY_TOTALS)
-  const [scores, setScores] = useState<Record<string, ScoreTotals>>({})
+  // Our own card summary (reported by <Scorecard onReport> — score breakdown plus
+  // the colors we've locked), and every player's summary keyed by peer id (the
+  // host aggregates and broadcasts these).
+  const [mySummary, setMySummary] = useState(EMPTY_SUMMARY)
+  const [summaries, setSummaries] = useState<Record<string, CardSummary>>({})
   // Host-assigned id for the roll history (the host is its sole writer). Activity
   // entries instead key off the mover's own stable move id (see applyMove).
   const nextId = useRef(1)
@@ -63,7 +64,7 @@ function App() {
   const historyRef = useRef(history)
   const playersRef = useRef(players)
   const actionsRef = useRef(actions)
-  const scoresRef = useRef(scores)
+  const summariesRef = useRef(summaries)
 
   // `handleMessage`/`handleClientJoin`/`handleClientLeave` are hoisted and only
   // ever invoked after render (on a peer event), so passing them straight through
@@ -110,12 +111,12 @@ function App() {
     [role, send],
   )
 
-  // Commit the per-player scores locally; the host (authoritative) broadcasts
-  // them. Memoized so the score-reporting effects can depend on it without churn.
-  const updateScores = useCallback(
-    (next: Record<string, ScoreTotals>) => {
-      scoresRef.current = next
-      setScores(next)
+  // Commit the per-player summaries locally; the host (authoritative) broadcasts
+  // them. Memoized so the reporting effect can depend on it without churn.
+  const updateSummaries = useCallback(
+    (next: Record<string, CardSummary>) => {
+      summariesRef.current = next
+      setSummaries(next)
       if (role === 'host') {
         send({ type: 'scores', scores: next } satisfies Message)
       }
@@ -161,7 +162,11 @@ function App() {
     setRolling(true)
     if (role === 'host') send({ type: 'rolling' } satisfies Message)
     setTimeout(() => {
-      const rolled = DICE.map((d) => ({ ...d, value: rollValue() }))
+      // A locked color's die is out of play: keep its current face, roll the rest.
+      const locked = lockedAcross(summariesRef.current)
+      const rolled = diceRef.current.map((d) =>
+        d.color !== 'white' && locked.includes(d.color) ? d : { ...d, value: rollValue() },
+      )
       const nextHistory: RollEntry[] = [
         { id: nextId.current++, dice: rolled, roller },
         ...historyRef.current,
@@ -194,7 +199,7 @@ function App() {
       if (m.type === 'roll') performRoll(m.roller)
       else if (m.type === 'clear') clearHistory()
       else if (m.type === 'action') applyMove(m.actor, m.event)
-      else if (m.type === 'score') updateScores({ ...scoresRef.current, [m.id]: m.totals })
+      else if (m.type === 'score') updateSummaries({ ...summariesRef.current, [m.id]: m.summary })
       else if (m.type === 'hello') {
         // We key the roster on the client's self-reported id, which PeerJS
         // guarantees equals the transport's `conn.peer` — so handleClientLeave
@@ -211,7 +216,7 @@ function App() {
       } else if (m.type === 'actions') {
         applyActions(m.actions)
       } else if (m.type === 'scores') {
-        updateScores(m.scores)
+        updateSummaries(m.scores)
       }
     }
   }
@@ -222,15 +227,15 @@ function App() {
     send({ type: 'state', dice: diceRef.current, history: historyRef.current } satisfies Message)
     send({ type: 'roster', players: playersRef.current } satisfies Message)
     send({ type: 'actions', actions: actionsRef.current } satisfies Message)
-    send({ type: 'scores', scores: scoresRef.current } satisfies Message)
+    send({ type: 'scores', scores: summariesRef.current } satisfies Message)
   }
 
   // Host: drop a disconnected client from the roster and the scoreboard.
   function handleClientLeave(id: string) {
     updateRoster(playersRef.current.filter((player) => player.id !== id))
-    const rest = { ...scoresRef.current }
+    const rest = { ...summariesRef.current }
     delete rest[id]
-    updateScores(rest)
+    updateSummaries(rest)
   }
 
   // Auto-join when opened via a shared ?room=CODE link.
@@ -263,13 +268,13 @@ function App() {
     }
   }, [role, status, peerId, myName, color, send])
 
-  // Host: keep our own score in the shared board; client: report it to the host.
-  // Runs on connect and whenever our total changes.
+  // Host: keep our own summary in the shared board; client: report it to the host.
+  // Runs on connect and whenever our card changes.
   useEffect(() => {
     if (status !== 'connected' || !peerId) return
-    if (role === 'host') updateScores({ ...scoresRef.current, [peerId]: myTotals })
-    else if (role === 'client') send({ type: 'score', id: peerId, totals: myTotals } satisfies Message)
-  }, [role, status, peerId, myTotals, updateScores, send])
+    if (role === 'host') updateSummaries({ ...summariesRef.current, [peerId]: mySummary })
+    else if (role === 'client') send({ type: 'score', id: peerId, summary: mySummary } satisfies Message)
+  }, [role, status, peerId, mySummary, updateSummaries, send])
 
   const shareLink = roomCode
     ? `${window.location.origin}${window.location.pathname}?room=${roomCode}`
@@ -289,8 +294,8 @@ function App() {
     setPlayers([])
     actionsRef.current = []
     setActions([])
-    scoresRef.current = {}
-    setScores({})
+    summariesRef.current = {}
+    setSummaries({})
   }
   function startHosting() {
     resetSession()
@@ -312,6 +317,10 @@ function App() {
   const playerById = new Map(players.map((p) => [p.id, p]))
   playerById.set(selfId, me)
   const resolvePlayer = (snapshot: Player): Player => playerById.get(snapshot.id) ?? snapshot
+
+  // Colors any player has locked are out of play for everyone: their die stops
+  // rolling and no one may mark that row. Union across every reported summary.
+  const lockedColors = lockedAcross(summaries)
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-10 bg-zinc-100 px-6 py-12">
@@ -347,7 +356,12 @@ function App() {
 
       <section className="grid grid-cols-3 gap-6 sm:grid-cols-6">
         {dice.map((die) => (
-          <Dice key={die.id} die={die} rolling={rolling} />
+          <Dice
+            key={die.id}
+            die={die}
+            rolling={rolling}
+            disabled={die.color !== 'white' && lockedColors.includes(die.color)}
+          />
         ))}
       </section>
 
@@ -367,14 +381,19 @@ function App() {
           players scoreboard and the dice history — the least important part — on
           the row beneath them. Everything stacks into one column on narrow screens. */}
       <div className="grid w-full max-w-7xl grid-cols-1 gap-6 xl:grid-cols-[minmax(0,48rem)_minmax(0,28rem)] xl:justify-center">
-        {/* Lift the total only in a room — solo has no scoreboard, so skipping it
-            avoids re-rendering the whole app on every cross/penalty/undo. */}
-        <Scorecard onMove={recordMove} onScore={role === 'solo' ? undefined : setMyTotals} />
+        {/* Report our summary only in a room — solo has no scoreboard, so skipping
+            it avoids re-rendering the whole app on every cross/penalty/undo.
+            `lockedColors` closes rows locked by anyone in the room (empty solo). */}
+        <Scorecard
+          onMove={recordMove}
+          onReport={role === 'solo' ? undefined : setMySummary}
+          lockedColors={lockedColors}
+        />
         {/* Shared feed + other players' scores — only meaningful in a room. */}
         {role !== 'solo' && (
           <>
             <ActivityFeed actions={actions} resolveActor={resolvePlayer} />
-            <ScoreBoard className="xl:self-start" players={players} scores={scores} selfId={selfId} />
+            <ScoreBoard className="xl:self-start" players={players} summaries={summaries} selfId={selfId} />
           </>
         )}
         <section className="w-full xl:self-start">
