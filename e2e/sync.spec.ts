@@ -160,3 +160,26 @@ test('the game ends for everyone when a player takes a fourth penalty', async ({
   await expect(client.getByText('Game over')).toHaveCount(0)
   await expect(client.getByRole('button', { name: 'red 2' })).toBeEnabled()
 })
+
+test('anyone can start a new game, resetting the room', async ({ browser }) => {
+  const { host, client } = await connectHostAndClient(browser)
+
+  // Host builds a score and ends the game with a fourth penalty.
+  await host.getByRole('button', { name: 'red 7' }).click()
+  await host.getByRole('button', { name: 'Penalty 4' }).click()
+  await expect(host.getByText('Game over')).toBeVisible()
+  await expect(client.getByText('Game over')).toBeVisible()
+
+  // The client (not the host) starts a new game — it resets for everyone.
+  await client.getByRole('button', { name: 'New game' }).click()
+
+  // The game-over banner clears on both peers…
+  await expect(host.getByText('Game over')).toHaveCount(0)
+  await expect(client.getByText('Game over')).toHaveCount(0)
+  // …the host's card is wiped (penalty and cross gone) and play resumes.
+  await expect(host.getByRole('button', { name: 'Penalty 1' })).toHaveAttribute('aria-pressed', 'false')
+  await expect(host.getByRole('button', { name: 'red 7' })).toHaveAttribute('aria-pressed', 'false')
+  await expect(host.getByRole('button', { name: 'Roll dice' })).toBeEnabled()
+  await expect(client.getByRole('button', { name: 'Roll dice' })).toBeEnabled()
+  await expect(client.getByRole('button', { name: 'red 2' })).toBeEnabled()
+})

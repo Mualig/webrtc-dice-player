@@ -56,6 +56,8 @@ function App() {
   // host aggregates and broadcasts these).
   const [mySummary, setMySummary] = useState(EMPTY_SUMMARY)
   const [summaries, setSummaries] = useState<Record<string, CardSummary>>({})
+  // Bumped to tell our own <Scorecard> to clear itself for a new game (see below).
+  const [newGameSignal, setNewGameSignal] = useState(0)
   // Host-assigned id for the roll history (the host is its sole writer). Activity
   // entries instead key off the mover's own stable move id (see applyMove).
   const nextId = useRef(1)
@@ -195,11 +197,32 @@ function App() {
     applyState(diceRef.current, [])
   }
 
+  // Start a fresh game for the whole room. A client asks the host; the host (or a
+  // solo player) clears the shared logs/scores/history and tells every peer to
+  // reset its scorecard. Each player's board then re-reports a blank summary, so
+  // the derived game-over state clears itself.
+  function newGame() {
+    if (role === 'client') {
+      send({ type: 'newgame' } satisfies Message)
+      return
+    }
+    performNewGame()
+  }
+
+  function performNewGame() {
+    applyActions([])
+    updateSummaries({})
+    applyState(diceRef.current, [])
+    setNewGameSignal((n) => n + 1) // reset our own scorecard
+    if (role === 'host') send({ type: 'newgame' } satisfies Message) // clients reset theirs
+  }
+
   function handleMessage(msg: unknown) {
     const m = msg as Message
     if (role === 'host') {
       if (m.type === 'roll') performRoll(m.roller)
       else if (m.type === 'clear') clearHistory()
+      else if (m.type === 'newgame') performNewGame()
       else if (m.type === 'action') applyMove(m.actor, m.event)
       else if (m.type === 'score') updateSummaries({ ...summariesRef.current, [m.id]: m.summary })
       else if (m.type === 'hello') {
@@ -219,6 +242,8 @@ function App() {
         applyActions(m.actions)
       } else if (m.type === 'scores') {
         updateSummaries(m.scores)
+      } else if (m.type === 'newgame') {
+        setNewGameSignal((n) => n + 1) // reset our scorecard for the new game
       }
     }
   }
@@ -370,6 +395,7 @@ function App() {
           selfId={selfId}
           reason={endReason}
           resolveName={(id) => displayName(playerById.get(id)?.name ?? '')}
+          onNewGame={newGame}
         />
       )}
 
@@ -409,6 +435,7 @@ function App() {
           onReport={setMySummary}
           lockedColors={lockedColors}
           gameOver={gameOver}
+          newGameSignal={newGameSignal}
         />
         {/* Shared feed + other players' scores — only meaningful in a room. */}
         {role !== 'solo' && (

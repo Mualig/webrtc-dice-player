@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { GameOverBanner } from './GameOverBanner'
 import type { CardSummary } from '../scorecard'
 
@@ -9,14 +10,11 @@ const resolveName = (id: string) => names[id] ?? 'Anonymous'
 
 describe('<GameOverBanner />', () => {
   it('states why the game ended', () => {
-    const { rerender } = render(
-      <GameOverBanner summaries={{ me: summary(0) }} selfId="me" reason="locks" resolveName={resolveName} />,
-    )
+    const props = { summaries: { me: summary(0) }, selfId: 'me', resolveName, onNewGame: () => {} }
+    const { rerender } = render(<GameOverBanner {...props} reason="locks" />)
     expect(screen.getByText('Two rows were locked.')).toBeInTheDocument()
 
-    rerender(
-      <GameOverBanner summaries={{ me: summary(0) }} selfId="me" reason="penalties" resolveName={resolveName} />,
-    )
+    rerender(<GameOverBanner {...props} reason="penalties" />)
     expect(screen.getByText('A player took their fourth penalty.')).toBeInTheDocument()
   })
 
@@ -27,6 +25,7 @@ describe('<GameOverBanner />', () => {
         selfId="me"
         reason="locks"
         resolveName={resolveName}
+        onNewGame={() => {}}
       />,
     )
 
@@ -43,5 +42,22 @@ describe('<GameOverBanner />', () => {
     // Only the winner has the trophy; the rest are numbered.
     expect(within(rows[1]).getByText('2')).toBeInTheDocument()
     expect(within(rows[2]).getByText('3')).toBeInTheDocument()
+  })
+
+  it('starts a new game when the button is clicked', async () => {
+    const user = userEvent.setup()
+    const onNewGame = vi.fn()
+    render(
+      <GameOverBanner
+        summaries={{ me: summary(0) }}
+        selfId="me"
+        reason="locks"
+        resolveName={resolveName}
+        onNewGame={onNewGame}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'New game' }))
+    expect(onNewGame).toHaveBeenCalledOnce()
   })
 })

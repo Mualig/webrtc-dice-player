@@ -31,6 +31,11 @@ type LoggedAction = { id: number; action: CardAction }
 // the effect below) — so Undo is scoped to the current session.
 type CardState = { marks: ScoreMarks; penalties: number; history: LoggedAction[] }
 
+// A fresh, empty card — the starting state and what Reset / a new game clear to.
+function blankCard(): CardState {
+  return { marks: emptyMarks(), penalties: 0, history: [] }
+}
+
 // Restore a saved card, tolerating anything malformed in storage.
 function loadState(): CardState {
   try {
@@ -43,7 +48,7 @@ function loadState(): CardState {
     const penalties = Math.min(MAX_PENALTIES, Math.max(0, Math.floor(Number(parsed?.penalties)) || 0))
     return { marks, penalties, history: [] }
   } catch {
-    return { marks: emptyMarks(), penalties: 0, history: [] }
+    return blankCard()
   }
 }
 
@@ -166,6 +171,7 @@ export function Scorecard({
   onReport,
   lockedColors = [],
   gameOver = false,
+  newGameSignal = 0,
 }: Readonly<{
   onMove?: (event: MoveEvent) => void
   onReport?: (summary: CardSummary) => void
@@ -174,6 +180,8 @@ export function Scorecard({
   // True once the game has ended (see App): the board is frozen. Undo/Reset stay
   // available so a triggering misclick can be taken back (which resumes play).
   gameOver?: boolean
+  // Bumped by the app to start a new game for the room — clears this card.
+  newGameSignal?: number
 }>) {
   const [card, setCard] = useState<CardState>(loadState)
   // Monotonic id stamped on each move so undo can name the exact move it reverts.
@@ -247,9 +255,20 @@ export function Scorecard({
   }
 
   function reset() {
-    setCard({ marks: emptyMarks(), penalties: 0, history: [] })
+    setCard(blankCard())
     setConfirmingReset(false)
   }
+
+  // Clear the card when the app starts a new game (bumps newGameSignal). Skip the
+  // initial mount, which is just the loaded/persisted card.
+  const mounted = useRef(false)
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true
+      return
+    }
+    setCard(blankCard())
+  }, [newGameSignal])
 
   // Memoized so it's computed once per card change and has a stable identity the
   // report effect below can depend on (a fresh object would fire it every render).

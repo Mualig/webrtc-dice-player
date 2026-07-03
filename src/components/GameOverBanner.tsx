@@ -9,11 +9,14 @@ export function GameOverBanner({
   selfId,
   reason,
   resolveName,
+  onNewGame,
 }: Readonly<{
   summaries: Record<string, CardSummary>
   selfId: string
   reason: GameOverReason
   resolveName: (id: string) => string
+  // Start a fresh game for the whole room.
+  onNewGame: () => void
 }>) {
   const standings = Object.entries(summaries)
     .map(([id, s]) => ({ id, name: resolveName(id), total: s.totals.total }))
@@ -47,6 +50,13 @@ export function GameOverBanner({
           </li>
         ))}
       </ol>
+      <button
+        type="button"
+        onClick={onNewGame}
+        className="mt-4 rounded-full bg-amber-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 active:scale-95"
+      >
+        New game
+      </button>
     </div>
   )
 }

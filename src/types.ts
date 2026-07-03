@@ -35,6 +35,7 @@ export type ActionEntry = {
 export type Message =
   | { type: 'roll'; roller: Player } // client -> host: roll on my behalf, attributed to `roller`
   | { type: 'clear' } // client -> host: please clear history
+  | { type: 'newgame' } // client -> host: start a new game; host -> clients: reset for a new game
   | { type: 'rolling' } // host -> clients: a roll started (animate)
   | { type: 'state'; dice: Die[]; history: RollEntry[] } // host -> clients: authoritative dice/history
   | { type: 'hello'; id: string; name: string; color: string } // client -> host: my identity + name + color
