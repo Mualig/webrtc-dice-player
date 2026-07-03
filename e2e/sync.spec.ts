@@ -170,8 +170,9 @@ test('anyone can start a new game, resetting the room', async ({ browser }) => {
   await expect(host.getByText('Game over')).toBeVisible()
   await expect(client.getByText('Game over')).toBeVisible()
 
-  // The client (not the host) starts a new game — it resets for everyone.
-  await client.getByRole('button', { name: 'New game' }).click()
+  // The client (not the host) starts a new game from the banner — it resets for
+  // everyone. (Scope to the banner: the menu also has a "New game" button.)
+  await client.getByRole('status').getByRole('button', { name: 'New game' }).click()
 
   // The game-over banner clears on both peers…
   await expect(host.getByText('Game over')).toHaveCount(0)
@@ -182,4 +183,24 @@ test('anyone can start a new game, resetting the room', async ({ browser }) => {
   await expect(host.getByRole('button', { name: 'Roll dice' })).toBeEnabled()
   await expect(client.getByRole('button', { name: 'Roll dice' })).toBeEnabled()
   await expect(client.getByRole('button', { name: 'red 2' })).toBeEnabled()
+})
+
+test('the menu "New game" resets the room mid-game', async ({ browser }) => {
+  const { host, client } = await connectHostAndClient(browser)
+
+  // Both players make a mark — a game is in progress (not over).
+  await host.getByRole('button', { name: 'red 7' }).click()
+  await client.getByRole('button', { name: 'yellow 3' }).click()
+  await expect(host.getByRole('button', { name: 'red 7, crossed off' })).toBeVisible()
+
+  // Host starts a new game from the menu, which asks to confirm first.
+  await host.getByRole('button', { name: 'Open menu' }).click()
+  const menu = host.getByRole('dialog', { name: 'Menu' })
+  await menu.getByRole('button', { name: 'New game' }).click() // opens the confirmation
+  await menu.getByRole('button', { name: 'New game' }).click() // confirms
+
+  // The menu auto-closes, and both players' cards are wiped.
+  await expect(host.getByRole('button', { name: 'Open menu' })).toHaveAttribute('aria-expanded', 'false')
+  await expect(host.getByRole('button', { name: 'red 7' })).toHaveAttribute('aria-pressed', 'false')
+  await expect(client.getByRole('button', { name: 'yellow 3' })).toHaveAttribute('aria-pressed', 'false')
 })

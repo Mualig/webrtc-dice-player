@@ -62,8 +62,9 @@ function GearIcon() {
 // dice and history. The toggle button lives in the top-left corner; opening it
 // slides the panel in over a dimming backdrop, and Escape or a backdrop click
 // closes it. `connected` drives a status dot on the toggle so players can tell
-// they're in a room without opening the drawer. `children` render below the
-// identity fields (the connection panel).
+// they're in a room without opening the drawer. `children` is a render function
+// given the drawer's `close` (so an action like "New game" can dismiss the menu),
+// rendered below the identity fields (the connection panel).
 export function SidePanel({
   name,
   color,
@@ -77,7 +78,7 @@ export function SidePanel({
   connected: boolean
   onNameChange: (value: string) => void
   onColorChange: (value: string) => void
-  children?: ReactNode
+  children?: (close: () => void) => ReactNode
 }>) {
   const [open, setOpen] = useState(false)
   const close = () => setOpen(false)
@@ -161,7 +162,7 @@ export function SidePanel({
             onNameChange={onNameChange}
             onColorChange={onColorChange}
           />
-          {children}
+          {children?.(close)}
         </div>
       </aside>
     </>

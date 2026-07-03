@@ -9,7 +9,6 @@ import {
   SCORE_ROWS,
   canMark,
   cardSummary,
-  countMarks,
   emptyMarks,
   isLocked,
   type CardAction,
@@ -177,7 +176,7 @@ export function Scorecard({
   onReport?: (summary: CardSummary) => void
   // Colors locked by anyone in the room — those rows are closed for this card too.
   lockedColors?: RowColor[]
-  // True once the game has ended (see App): the board is frozen. Undo/Reset stay
+  // True once the game has ended (see App): the board is frozen, though Undo stays
   // available so a triggering misclick can be taken back (which resumes play).
   gameOver?: boolean
   // Bumped by the app to start a new game for the room — clears this card.
@@ -186,23 +185,11 @@ export function Scorecard({
   const [card, setCard] = useState<CardState>(loadState)
   // Monotonic id stamped on each move so undo can name the exact move it reverts.
   const nextMoveId = useRef(0)
-  // Reset clears the whole card irreversibly, so it asks to confirm first.
-  const [confirmingReset, setConfirmingReset] = useState(false)
 
   useEffect(() => {
     // Persist the scored state only; the move log is session-scoped (see CardState).
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ marks: card.marks, penalties: card.penalties }))
   }, [card])
-
-  // Dismiss the reset confirmation on Escape (a backdrop handles click-away).
-  useEffect(() => {
-    if (!confirmingReset) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setConfirmingReset(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [confirmingReset])
 
   // Handlers guard against no-ops on the *current* state (each click is its own
   // event, so `card` is up to date) and report the move only when one happened.
@@ -254,11 +241,6 @@ export function Scorecard({
     onMove?.({ type: 'undo', id: last.id })
   }
 
-  function reset() {
-    setCard(blankCard())
-    setConfirmingReset(false)
-  }
-
   // Clear the card when the app starts a new game (bumps newGameSignal). Skip the
   // initial mount, which is just the loaded/persisted card.
   const mounted = useRef(false)
@@ -273,7 +255,6 @@ export function Scorecard({
   // Memoized so it's computed once per card change and has a stable identity the
   // report effect below can depend on (a fresh object would fire it every render).
   const summary = useMemo(() => cardSummary(card.marks, card.penalties), [card])
-  const anyMarks = SCORE_ROWS.some((r) => countMarks(card.marks[r.color]) > 0) || card.penalties > 0
   const canUndo = card.history.length > 0
 
   // Report our summary (score breakdown + locked colors) so the app can share it
@@ -289,57 +270,15 @@ export function Scorecard({
           <h2 className="text-lg font-bold tracking-tight text-zinc-900">Qwixx scorecard</h2>
           <p className="text-xs text-zinc-400">{`Cross off numbers left to right · lock a row after ${LOCK_THRESHOLD} X’s`}</p>
         </div>
-        <div className="relative flex items-center gap-2">
-          <button
-            type="button"
-            onClick={undo}
-            disabled={!canUndo}
-            title="Undo the last move"
-            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:opacity-40"
-          >
-            Undo
-          </button>
-          <button
-            type="button"
-            onClick={() => setConfirmingReset(true)}
-            disabled={!anyMarks}
-            className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 disabled:opacity-40"
-          >
-            Reset card
-          </button>
-
-          {confirmingReset && (
-            <>
-              {/* Transparent click-away backdrop — mirrors the SidePanel pattern. */}
-              <div className="fixed inset-0 z-40" aria-hidden="true" onClick={() => setConfirmingReset(false)} />
-              <div
-                role="dialog"
-                aria-label="Reset card?"
-                className="absolute right-0 top-full z-50 mt-2 w-64 rounded-xl border border-zinc-200 bg-white p-3 text-left shadow-xl"
-              >
-                <p className="text-sm text-zinc-600">
-                  Reset the card? This clears every cross and penalty and can’t be undone.
-                </p>
-                <div className="mt-3 flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setConfirmingReset(false)}
-                    className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={reset}
-                    className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-red-700"
-                  >
-                    Reset
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        <button
+          type="button"
+          onClick={undo}
+          disabled={!canUndo}
+          title="Undo the last move"
+          className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:opacity-40"
+        >
+          Undo
+        </button>
       </header>
 
       <div className="overflow-x-auto pb-1">

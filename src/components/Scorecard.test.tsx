@@ -25,7 +25,6 @@ describe('<Scorecard />', () => {
     expect(cell('red 2')).toBeInTheDocument()
     expect(cell('blue 12')).toBeInTheDocument()
     expect(totals()).toEqual({ red: 0, yellow: 0, green: 0, blue: 0, penalty: 0, grand: 0 })
-    expect(cell('Reset card')).toBeDisabled()
     expect(cell('Undo')).toBeDisabled()
   })
 
@@ -162,35 +161,6 @@ describe('<Scorecard />', () => {
     expect(cell('red 7, crossed off')).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('resets every mark and penalty once the reset is confirmed', async () => {
-    const user = userEvent.setup()
-    render(<Scorecard />)
-
-    await user.click(cell('red 7'))
-    await user.click(cell('Penalty 1'))
-    await user.click(cell('Reset card')) // opens the confirmation
-    await user.click(cell('Reset')) // confirms
-
-    expect(cell('red 7')).toHaveAttribute('aria-pressed', 'false')
-    expect(totals().grand).toBe(0)
-    expect(cell('Reset card')).toBeDisabled()
-  })
-
-  it('does not reset when the confirmation is cancelled', async () => {
-    const user = userEvent.setup()
-    render(<Scorecard />)
-
-    await user.click(cell('red 7'))
-    await user.click(cell('Reset card')) // opens the confirmation — nothing cleared yet
-    expect(cell('red 7, crossed off')).toHaveAttribute('aria-pressed', 'true')
-
-    await user.click(cell('Cancel'))
-
-    expect(cell('red 7, crossed off')).toHaveAttribute('aria-pressed', 'true') // still crossed
-    expect(totals().grand).toBe(1)
-    expect(screen.queryByRole('dialog', { name: 'Reset card?' })).toBeNull() // popover closed
-  })
-
   it('reports each move to onMove for broadcasting', async () => {
     const user = userEvent.setup()
     const onMove = vi.fn()
@@ -256,11 +226,10 @@ describe('<Scorecard />', () => {
     await user.click(cell('red 7'))
     onMove.mockClear()
 
-    // A crossed cell and cells to its left are disabled — clicking dispatches
-    // nothing — and Reset is not a tracked move.
+    // A crossed cell and the cells to its left are disabled — clicking either
+    // dispatches nothing.
     await user.click(cell('red 7, crossed off'))
     await user.click(cell('red 4'))
-    await user.click(cell('Reset card'))
 
     expect(onMove).not.toHaveBeenCalled()
   })

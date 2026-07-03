@@ -12,6 +12,7 @@ import { Scorecard } from './components/Scorecard'
 import { ActivityFeed } from './components/ActivityFeed'
 import { ScoreBoard } from './components/ScoreBoard'
 import { GameOverBanner } from './components/GameOverBanner'
+import { NewGameButton } from './components/NewGameButton'
 
 // The activity feed keeps only the most recent moves so the log — and the
 // message that broadcasts it — stays bounded over a long game.
@@ -366,21 +367,32 @@ function App() {
         onNameChange={setName}
         onColorChange={setColor}
       >
-        <ConnectionPanel
-          role={role}
-          status={status}
-          roomCode={roomCode}
-          peerCount={peerCount}
-          players={players}
-          selfId={selfId}
-          error={error}
-          shareLink={shareLink}
-          copied={copied}
-          onCreate={startHosting}
-          onJoin={startJoining}
-          onLeave={leaveRoom}
-          onCopy={copyLink}
-        />
+        {(closeMenu) => (
+          <>
+            <ConnectionPanel
+              role={role}
+              status={status}
+              roomCode={roomCode}
+              peerCount={peerCount}
+              players={players}
+              selfId={selfId}
+              error={error}
+              shareLink={shareLink}
+              copied={copied}
+              onCreate={startHosting}
+              onJoin={startJoining}
+              onLeave={leaveRoom}
+              onCopy={copyLink}
+            />
+            {/* Starting a new game dismisses the menu so the fresh board is visible. */}
+            <NewGameButton
+              onNewGame={() => {
+                newGame()
+                closeMenu()
+              }}
+            />
+          </>
+        )}
       </SidePanel>
 
       <header className="text-center">
