@@ -88,15 +88,13 @@ export type CardAction =
   | { type: 'mark'; color: RowColor; index: number }
   | { type: 'penalty'; previous: number }
 
-// A scorecard move as broadcast to the other players for the shared activity
-// feed. Distinct from CardAction (the local undo log) in payload, not shape: a
-// `penalty` records whether it was added or cleared (rather than the previous
-// count Undo needs), and there is a first-class `undo` describing a reversal.
-// A move that appears as its own feed entry: crossing off a cell, or a penalty
-// (recording whether it was added or cleared, for display).
+// A move that appears as its own entry in the shared activity feed: crossing off
+// a cell (or locking a row, when the index is LAST) or taking a penalty. Like
+// crossing off a number, a penalty is only ever added here — clearing one is an
+// Undo, which strikes the entry rather than logging a new move.
 export type LoggedMove =
   | { type: 'mark'; color: RowColor; index: number }
-  | { type: 'penalty'; filled: boolean }
+  | { type: 'penalty' }
 
 // What the scorecard reports for each player action (via <Scorecard onMove>).
 // A `move` carries a stable per-card id; an `undo` names the id of the move it

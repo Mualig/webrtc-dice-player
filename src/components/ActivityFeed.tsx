@@ -20,7 +20,7 @@ function describeMove(move: LoggedMove): ReactNode {
       )
     }
     case 'penalty':
-      return move.filled ? `took a −${PENALTY_VALUE} penalty` : 'cleared a penalty'
+      return `took a −${PENALTY_VALUE} penalty`
   }
 }
 

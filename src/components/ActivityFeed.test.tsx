@@ -24,25 +24,23 @@ describe('<ActivityFeed />', () => {
     const actions: ActionEntry[] = [
       { id: '1', actor: alice, move: { type: 'mark', color: 'red', index: 5 } }, // red 7
       { id: '2', actor: bob, move: { type: 'mark', color: 'green', index: 10 } }, // LAST → lock
-      { id: '3', actor: alice, move: { type: 'penalty', filled: true } },
-      { id: '4', actor: bob, move: { type: 'penalty', filled: false } },
+      { id: '3', actor: alice, move: { type: 'penalty' } },
     ]
     render(<ActivityFeed actions={actions} resolveActor={resolverFor(alice, bob)} />)
 
     const items = screen.getAllByRole('listitem')
-    expect(items).toHaveLength(4)
+    expect(items).toHaveLength(3)
     expect(items[0]).toHaveTextContent('Alice')
     expect(items[0]).toHaveTextContent('crossed off red 7')
     expect(items[1]).toHaveTextContent('Bob')
     expect(items[1]).toHaveTextContent('locked the green row')
     expect(items[2]).toHaveTextContent(/took a .*penalty/)
-    expect(items[3]).toHaveTextContent('cleared a penalty')
   })
 
   it('strikes through an undone move rather than adding a row', () => {
     const actions: ActionEntry[] = [
       { id: '1', actor: alice, move: { type: 'mark', color: 'red', index: 5 }, undone: true },
-      { id: '2', actor: bob, move: { type: 'penalty', filled: true } },
+      { id: '2', actor: bob, move: { type: 'penalty' } },
     ]
     render(<ActivityFeed actions={actions} resolveActor={resolverFor(alice, bob)} />)
 

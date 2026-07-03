@@ -224,18 +224,18 @@ export function Scorecard({
     onMove?.({ type: 'move', id, move })
   }
 
-  function togglePenalty(index: number) {
-    if (gameOver) return
-    // Clicking a box fills up to it, or clears it and everything after. Decide
-    // the new count once (each click is its own event, so `card` is current).
-    const next = index < card.penalties ? index : index + 1
+  function addPenalty() {
+    // Take one penalty. Like crossing off a number, it can't be taken back by
+    // clicking again — only Undo clears it. No-op once the game is over or the
+    // fourth penalty is already taken (the button only enables the next box).
+    if (gameOver || card.penalties >= MAX_PENALTIES) return
     const id = nextMoveId.current++
     setCard((prev) => ({
       ...prev,
-      penalties: next,
+      penalties: prev.penalties + 1,
       history: [...prev.history, { id, action: { type: 'penalty', previous: prev.penalties } }],
     }))
-    onMove?.({ type: 'move', id, move: { type: 'penalty', filled: next > card.penalties } })
+    onMove?.({ type: 'move', id, move: { type: 'penalty' } })
   }
 
   // Revert the most recent move, drop it from the log, and name its id so the
@@ -365,17 +365,21 @@ export function Scorecard({
         <span className="text-sm font-semibold text-zinc-600">Penalties</span>
         {Array.from({ length: MAX_PENALTIES }, (_, i) => {
           const active = i < card.penalties
+          // Only the next empty box is interactive: you take one penalty at a
+          // time, and can't take one back by clicking it (Undo does that). Filled
+          // boxes and later ones are disabled; the still-out-of-reach ones dim.
+          const interactive = !gameOver && i === card.penalties
           return (
             <button
               key={i}
               type="button"
-              onClick={() => togglePenalty(i)}
-              disabled={gameOver}
+              onClick={addPenalty}
+              disabled={!interactive}
               aria-pressed={active}
               aria-label={`Penalty ${i + 1}`}
               className={`relative flex h-8 w-8 items-center justify-center rounded-md border-2 transition ${
                 active ? 'border-zinc-800 text-zinc-800' : 'border-zinc-300 text-transparent enabled:hover:border-zinc-500'
-              }`}
+              } ${!active && !interactive ? 'opacity-45' : ''}`}
             >
               {active && <Cross className="text-zinc-800" />}
             </button>

@@ -129,17 +129,26 @@ describe('<Scorecard />', () => {
     expect(totals().grand).toBe(28)
   })
 
-  it('applies and clears penalties (−5 each)', async () => {
+  it('takes penalties one at a time; clicking again cannot clear them (Undo does)', async () => {
     const user = userEvent.setup()
     render(<Scorecard />)
 
-    // Clicking the 3rd box fills up to three penalties = −15.
-    await user.click(cell('Penalty 3'))
-    expect(totals()).toMatchObject({ penalty: 15, grand: -15 })
+    // With no penalties, only the first box is active — a click on a later box
+    // can't fill several at once.
+    expect(cell('Penalty 1')).toBeEnabled()
+    expect(cell('Penalty 3')).toBeDisabled()
 
-    // Clicking the 1st box clears it and everything after it.
+    // Each click on the next box adds exactly one penalty.
     await user.click(cell('Penalty 1'))
-    expect(totals()).toMatchObject({ penalty: 0, grand: 0 })
+    expect(totals()).toMatchObject({ penalty: 5, grand: -5 })
+    await user.click(cell('Penalty 2'))
+    expect(totals()).toMatchObject({ penalty: 10, grand: -10 })
+
+    // A filled box is disabled — like a crossed-off number, a click can't take it
+    // back; only Undo clears the most recent penalty.
+    expect(cell('Penalty 1')).toBeDisabled()
+    await user.click(cell('Undo'))
+    expect(totals()).toMatchObject({ penalty: 5, grand: -5 })
   })
 
   it('persists marks to localStorage and restores them on remount', async () => {
@@ -192,7 +201,7 @@ describe('<Scorecard />', () => {
     expect(onMove).toHaveBeenLastCalledWith({ type: 'move', id: 0, move: { type: 'mark', color: 'red', index: 5 } })
 
     await user.click(cell('Penalty 1')) // id 1
-    expect(onMove).toHaveBeenLastCalledWith({ type: 'move', id: 1, move: { type: 'penalty', filled: true } })
+    expect(onMove).toHaveBeenLastCalledWith({ type: 'move', id: 1, move: { type: 'penalty' } })
 
     await user.click(cell('Undo')) // reverts the penalty (id 1)
     expect(onMove).toHaveBeenLastCalledWith({ type: 'undo', id: 1 })

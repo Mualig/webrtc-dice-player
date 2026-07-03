@@ -136,8 +136,8 @@ test('locking a row takes that color out of play for everyone', async ({ browser
 test('the game ends for everyone when a player takes a fourth penalty', async ({ browser }) => {
   const { host, client } = await connectHostAndClient(browser)
 
-  // Host fills their fourth penalty — a Qwixx end condition.
-  await host.getByRole('button', { name: 'Penalty 4' }).click()
+  // Host takes four penalties, one at a time — the fourth ends the game.
+  for (const n of [1, 2, 3, 4]) await host.getByRole('button', { name: `Penalty ${n}` }).click()
 
   // Both peers reach game over, and the board + roll are frozen on the client.
   await expect(host.getByText('Game over')).toBeVisible()
@@ -164,9 +164,9 @@ test('the game ends for everyone when a player takes a fourth penalty', async ({
 test('anyone can start a new game, resetting the room', async ({ browser }) => {
   const { host, client } = await connectHostAndClient(browser)
 
-  // Host builds a score and ends the game with a fourth penalty.
+  // Host builds a score and ends the game with a fourth penalty (one at a time).
   await host.getByRole('button', { name: 'red 7' }).click()
-  await host.getByRole('button', { name: 'Penalty 4' }).click()
+  for (const n of [1, 2, 3, 4]) await host.getByRole('button', { name: `Penalty ${n}` }).click()
   await expect(host.getByText('Game over')).toBeVisible()
   await expect(client.getByText('Game over')).toBeVisible()
 
