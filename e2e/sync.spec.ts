@@ -154,11 +154,27 @@ test('the game ends for everyone when a player takes a fourth penalty', async ({
   await expect(rows.last()).toContainText('Alice')
   await expect(rows.last()).toContainText('-20')
 
+  // The finished game is recorded to the local history — a full-screen view
+  // opened from the menu (which closes itself), winner first.
+  const hostHistory = host.getByRole('dialog', { name: 'Game history' })
+  await host.getByRole('button', { name: 'Open menu' }).click()
+  await host.getByRole('button', { name: 'Game history · 1' }).click()
+  await expect(hostHistory).toContainText('🏆 Bob 0')
+  await expect(hostHistory).toContainText('Alice (you) -20')
+  await hostHistory.getByRole('button', { name: 'Close' }).click() // back to the game
+  await expect(hostHistory).toHaveCount(0)
+
   // Taking the penalty back resumes the game for everyone.
   await host.getByRole('button', { name: 'Undo' }).click()
   await expect(host.getByText('Game over')).toHaveCount(0)
   await expect(client.getByText('Game over')).toHaveCount(0)
   await expect(client.getByRole('button', { name: 'red 2' })).toBeEnabled()
+
+  // …and the record of the un-ended game is dropped from the history again.
+  await host.getByRole('button', { name: 'Open menu' }).click()
+  await host.getByRole('button', { name: 'Game history' }).click()
+  await expect(hostHistory).toContainText('No finished games yet.')
+  await hostHistory.getByRole('button', { name: 'Close' }).click()
 })
 
 test('anyone can start a new game, resetting the room', async ({ browser }) => {
@@ -183,6 +199,19 @@ test('anyone can start a new game, resetting the room', async ({ browser }) => {
   await expect(host.getByRole('button', { name: 'Roll dice' })).toBeEnabled()
   await expect(client.getByRole('button', { name: 'Roll dice' })).toBeEnabled()
   await expect(client.getByRole('button', { name: 'red 2' })).toBeEnabled()
+
+  // Starting a new game commits the record — the finished game stays in the
+  // history on every peer (here the client, who sees itself as "you").
+  const clientHistory = client.getByRole('dialog', { name: 'Game history' })
+  await client.getByRole('button', { name: 'Open menu' }).click()
+  await client.getByRole('button', { name: 'Game history · 1' }).click()
+  await expect(clientHistory).toContainText('🏆 Bob (you) 0')
+
+  // The row's X removes the game from this device's history.
+  await clientHistory.getByRole('button', { name: /Remove the game/ }).click()
+  await expect(clientHistory).toContainText('No finished games yet.')
+  await clientHistory.getByRole('button', { name: 'Close' }).click()
+  await expect(clientHistory).toHaveCount(0)
 })
 
 test('the menu "New game" resets the room mid-game', async ({ browser }) => {

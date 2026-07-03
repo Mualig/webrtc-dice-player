@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import type { ActionEntry, Player } from '../types'
 import { LAST, PENALTY_VALUE, ROW_STYLES, cellNumber, type LoggedMove } from '../scorecard'
 import { displayName } from '../format'
+import { EmptyHint } from './EmptyHint'
 
 // Human-readable description of a logged move, e.g. "crossed off green 10", with
 // the colored part (the row color + its number) rendered in that row's own color
@@ -36,9 +37,7 @@ export function ActivityFeed({
     <section className="flex w-full max-w-md flex-col">
       <h2 className="mb-3 text-lg font-semibold text-zinc-900">Scorecard activity</h2>
       {actions.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-6 text-center text-sm text-zinc-400">
-          No scorecard moves yet — players’ crosses and penalties show up here.
-        </p>
+        <EmptyHint>No scorecard moves yet — players’ crosses and penalties show up here.</EmptyHint>
       ) : (
         // On wide screens the grid stretches this card to the scorecard's height;
         // the list is taken out of flow (absolute) so its own length can't drive

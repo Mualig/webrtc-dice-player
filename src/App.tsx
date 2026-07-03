@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePeerSync } from './usePeerSync'
 import type { ActionEntry, Die, Message, Player, RollEntry } from './types'
 import { EMPTY_SUMMARY, gameOverReason, lockedAcross, type CardSummary, type MoveEvent } from './scorecard'
+import {
+  addGame,
+  loadGameHistory,
+  sameOutcome,
+  saveGameHistory,
+  type GameRecord,
+  type PlayerResult,
+} from './gameHistory'
 import { DICE, PLAYER_COLOR_PALETTE, rollValue } from './dice'
 import { displayName } from './format'
 import { Dice } from './components/Dice'
@@ -13,6 +21,8 @@ import { ActivityFeed } from './components/ActivityFeed'
 import { ScoreBoard } from './components/ScoreBoard'
 import { GameOverBanner } from './components/GameOverBanner'
 import { NewGameButton } from './components/NewGameButton'
+import { GameHistory } from './components/GameHistory'
+import { EmptyHint } from './components/EmptyHint'
 
 // The activity feed keeps only the most recent moves so the log — and the
 // message that broadcasts it — stays bounded over a long game.
@@ -20,6 +30,10 @@ const MAX_ACTIVITY = 50
 
 const NAME_KEY = 'webrtc-dice-player-player-name'
 const COLOR_KEY = 'webrtc-dice-player-player-color'
+
+// Stable empty standings while the game is running, so the memo below doesn't
+// hand the recording effect a fresh [] on every score update.
+const NO_STANDINGS: PlayerResult[] = []
 
 // Players are assigned one of the dice colors by default; the picker still lets
 // them choose any color afterwards.
@@ -59,6 +73,12 @@ function App() {
   const [summaries, setSummaries] = useState<Record<string, CardSummary>>({})
   // Bumped to tell our own <Scorecard> to clear itself for a new game (see below).
   const [newGameSignal, setNewGameSignal] = useState(0)
+  // Finished games recorded on this device (newest first), browsable in a
+  // full-screen view opened from the menu.
+  const [gameHistory, setGameHistory] = useState<GameRecord[]>(loadGameHistory)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  // Memoized so the memoized history view can skip re-renders while open.
+  const closeHistory = useCallback(() => setHistoryOpen(false), [])
   // Host-assigned id for the roll history (the host is its sole writer). Activity
   // entries instead key off the mover's own stable move id (see applyMove).
   const nextId = useRef(1)
@@ -70,6 +90,7 @@ function App() {
   const playersRef = useRef(players)
   const actionsRef = useRef(actions)
   const summariesRef = useRef(summaries)
+  const gameHistoryRef = useRef(gameHistory)
 
   // `handleMessage`/`handleClientJoin`/`handleClientLeave` are hoisted and only
   // ever invoked after render (on a peer event), so passing them straight through
@@ -88,8 +109,9 @@ function App() {
   // as a roster key, so solo rolls that later ride into a room degrade cleanly.
   const selfId = peerId ?? 'me'
   // Our own roster entry: attributes our rolls and resolves our live name/color
-  // in the history instantly, before the roster round-trips.
-  const me: Player = { id: selfId, name: myName, color }
+  // in the history instantly, before the roster round-trips. Memoized so the
+  // lookup map below (and everything derived from it) stays stable.
+  const me: Player = useMemo(() => ({ id: selfId, name: myName, color }), [selfId, myName, color])
 
   // Commit new dice/history locally. The host is authoritative, so every state
   // change is broadcast to clients from this single point.
@@ -127,6 +149,23 @@ function App() {
       }
     },
     [role, send],
+  )
+
+  // Commit the recorded-games list locally and persist it — localStorage is its
+  // storage of record. Memoized so the recording effect can depend on it.
+  const applyGameHistory = useCallback((next: GameRecord[]) => {
+    gameHistoryRef.current = next
+    setGameHistory(next)
+    saveGameHistory(next)
+  }, [])
+
+  // Remove one recorded game — a row's X button, or the recording effect
+  // dropping an un-ended game. Deliberately leaves savedGameRef alone: for a
+  // still-displayed game-over it keeps marking that game as already handled, so
+  // the recording effect can't re-record the game the user just deleted.
+  const removeGame = useCallback(
+    (game: GameRecord) => applyGameHistory(gameHistoryRef.current.filter((g) => g !== game)),
+    [applyGameHistory],
   )
 
   // Commit the shared activity log locally; the host — authoritative for it,
@@ -211,11 +250,23 @@ function App() {
   }
 
   function performNewGame() {
+    commitSavedGame() // the recorded result stands — this reset is not an Undo
+    // Tell clients first: they must commit their own record of the ended game
+    // before the clearing broadcasts below make their game-over state vanish.
+    if (role === 'host') send({ type: 'newgame' } satisfies Message)
     applyActions([])
     updateSummaries({})
     applyState(diceRef.current, [])
     setNewGameSignal((n) => n + 1) // reset our own scorecard
-    if (role === 'host') send({ type: 'newgame' } satisfies Message) // clients reset theirs
+  }
+
+  // The record of the game that ended most recently, while its game-over is still
+  // showing: it is dropped again if the end is taken back with Undo. `committed`
+  // marks it final — the game-over is clearing for another reason (a new game
+  // started, or the session was left), so the record must stay.
+  const savedGameRef = useRef<GameRecord | 'committed' | null>(null)
+  function commitSavedGame() {
+    if (savedGameRef.current) savedGameRef.current = 'committed'
   }
 
   function handleMessage(msg: unknown) {
@@ -244,6 +295,7 @@ function App() {
       } else if (m.type === 'scores') {
         updateSummaries(m.scores)
       } else if (m.type === 'newgame') {
+        commitSavedGame() // the recorded result stands — this reset is not an Undo
         setNewGameSignal((n) => n + 1) // reset our scorecard for the new game
       }
     }
@@ -318,6 +370,7 @@ function App() {
   // Reset presence and activity when (re)starting or leaving a session, so stale
   // players or moves from a previous room never linger into the next one.
   function resetSession() {
+    commitSavedGame() // leaving a shown game-over keeps its recorded result
     playersRef.current = []
     setPlayers([])
     actionsRef.current = []
@@ -341,9 +394,13 @@ function App() {
   // Attributed entries (rolls and activity) follow the player's *current* name +
   // color: resolve by id from the live roster (plus our own entry, applied
   // instantly before the roster round-trips), falling back to the snapshot taken
-  // at the time of the entry once that player has left the room.
-  const playerById = new Map(players.map((p) => [p.id, p]))
-  playerById.set(selfId, me)
+  // at the time of the entry once that player has left the room. Memoized so the
+  // standings memo below can depend on it without churn.
+  const playerById = useMemo(() => {
+    const map = new Map(players.map((p) => [p.id, p]))
+    map.set(me.id, me)
+    return map
+  }, [players, me])
   const resolvePlayer = (snapshot: Player): Player => playerById.get(snapshot.id) ?? snapshot
 
   // Colors any player has locked are out of play for everyone: their die stops
@@ -354,9 +411,47 @@ function App() {
   // penalties. Fold our own latest summary in so it triggers instantly — and so
   // solo works, since solo never populates `summaries`. Every peer evaluates the
   // same shared state, so the game ends for all of them at once.
-  const gameSummaries = { ...summaries, [selfId]: mySummary }
+  const gameSummaries = useMemo(
+    () => ({ ...summaries, [selfId]: mySummary }),
+    [summaries, selfId, mySummary],
+  )
   const endReason = gameOverReason(gameSummaries)
   const gameOver = endReason !== null
+
+  // Final standings (highest total first) once the game has ended — rendered in
+  // the game-over banner and recorded to this device's history. Memoized so the
+  // recording effect below fires only on real changes.
+  const standings = useMemo<PlayerResult[]>(() => {
+    if (!gameOver) return NO_STANDINGS
+    return Object.entries(gameSummaries)
+      .map(([id, s]) => ({
+        name: displayName(playerById.get(id)?.name ?? ''),
+        total: s.totals.total,
+        ...(id === selfId && { you: true }),
+      }))
+      .sort((a, b) => b.total - a.total)
+  }, [gameOver, gameSummaries, playerById, selfId])
+
+  // Record the game the moment it ends; drop the record again if the end is taken
+  // back with Undo (a misclicked fourth penalty), unless it was committed by a
+  // new game / leaving the room. A game-over re-detected after a page reload
+  // matches the newest saved record (sameOutcome) and is not recorded twice.
+  useEffect(() => {
+    if (endReason && !savedGameRef.current) {
+      const record: GameRecord = { endedAt: Date.now(), reason: endReason, players: standings }
+      const newest = gameHistoryRef.current[0]
+      if (newest && sameOutcome(newest, record)) {
+        savedGameRef.current = newest
+      } else {
+        savedGameRef.current = record
+        applyGameHistory(addGame(gameHistoryRef.current, record))
+      }
+    } else if (!endReason && savedGameRef.current) {
+      const saved = savedGameRef.current
+      savedGameRef.current = null
+      if (saved !== 'committed') removeGame(saved)
+    }
+  }, [endReason, standings, applyGameHistory, removeGame])
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-10 bg-zinc-100 px-6 py-12">
@@ -391,9 +486,23 @@ function App() {
                 closeMenu()
               }}
             />
+            {/* Opens the full-screen history view; the drawer closes so the view's
+                Close button returns straight to the game. */}
+            <button
+              type="button"
+              onClick={() => {
+                setHistoryOpen(true)
+                closeMenu()
+              }}
+              className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100"
+            >
+              Game history{gameHistory.length > 0 && ` · ${gameHistory.length}`}
+            </button>
           </>
         )}
       </SidePanel>
+
+      {historyOpen && <GameHistory games={gameHistory} onClose={closeHistory} onRemove={removeGame} />}
 
       <header className="text-center">
         <h1 className="text-4xl font-bold tracking-tight text-zinc-900">
@@ -401,15 +510,7 @@ function App() {
         </h1>
       </header>
 
-      {endReason && (
-        <GameOverBanner
-          summaries={gameSummaries}
-          selfId={selfId}
-          reason={endReason}
-          resolveName={(id) => displayName(playerById.get(id)?.name ?? '')}
-          onNewGame={newGame}
-        />
-      )}
+      {endReason && <GameOverBanner players={standings} reason={endReason} onNewGame={newGame} />}
 
       <section className="grid grid-cols-3 gap-6 sm:grid-cols-6">
         {dice.map((die) => (
@@ -470,9 +571,7 @@ function App() {
             )}
           </div>
           {history.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-6 text-center text-sm text-zinc-400">
-              No rolls yet — hit “Roll dice” to get started.
-            </p>
+            <EmptyHint>No rolls yet — hit “Roll dice” to get started.</EmptyHint>
           ) : (
             <ul className="flex max-h-80 flex-col gap-2 overflow-y-auto pr-1">
               {history.map((entry, index) => (

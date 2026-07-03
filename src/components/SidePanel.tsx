@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { displayName } from '../format'
+import { XIcon } from './XIcon'
 
 function IdentityFields({
   name,
@@ -141,18 +142,7 @@ export function SidePanel({
             aria-label="Close menu"
             className="rounded-lg p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-900"
           >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="h-5 w-5"
-              aria-hidden="true"
-            >
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
+            <XIcon className="h-5 w-5" />
           </button>
         </div>
         <div className="flex flex-1 flex-col gap-5 overflow-y-auto p-5">

@@ -2,6 +2,7 @@ import type { Player } from '../types'
 import { EMPTY_SUMMARY, type CardSummary } from '../scorecard'
 import { displayName } from '../format'
 import { TotalsRow } from './TotalsRow'
+import { EmptyHint } from './EmptyHint'
 
 // A card showing the other players in the room and their live score breakdowns
 // (highest total first), each rendered like the scorecard's own Totals line. Your
@@ -27,9 +28,7 @@ export function ScoreBoard({
     <section className={`w-full max-w-3xl rounded-2xl bg-white p-5 shadow-lg ${className}`}>
       <h2 className="mb-4 text-lg font-bold tracking-tight text-zinc-900">Other players</h2>
       {others.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-6 text-center text-sm text-zinc-400">
-          Waiting for other players to join…
-        </p>
+        <EmptyHint>Waiting for other players to join…</EmptyHint>
       ) : (
         <ul className="flex flex-col gap-3">
           {others.map(({ player, totals }) => (
