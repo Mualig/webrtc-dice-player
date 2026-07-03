@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   LAST,
   LOCK_THRESHOLD,
@@ -8,15 +8,17 @@ import {
   ROW_STYLES,
   SCORE_ROWS,
   canMark,
+  cardTotals,
   countMarks,
   emptyMarks,
   isLocked,
-  rowScore,
   type CardAction,
   type MoveEvent,
   type RowColor,
   type ScoreMarks,
+  type ScoreTotals,
 } from '../scorecard'
+import { TotalsRow } from './TotalsRow'
 
 const STORAGE_KEY = 'webrtc-dice-player-scorecard'
 
@@ -144,16 +146,6 @@ function Row({
   )
 }
 
-function ScoreBox({ value, className }: Readonly<{ value: number; className: string }>) {
-  return (
-    <span
-      className={`inline-flex h-9 min-w-11 items-center justify-center rounded-lg px-2 text-base font-bold tabular-nums ring-2 ring-inset ${className}`}
-    >
-      {value}
-    </span>
-  )
-}
-
 // The player's own Qwixx scorecard: click numbers to cross them off (left to
 // right only), cross the lock once a row has at least 5 X's, and tally penalties.
 // Scores update live. State is local to this player and saved to localStorage.
@@ -162,7 +154,7 @@ function ScoreBox({ value, className }: Readonly<{ value: number; className: str
 export function Scorecard({
   onMove,
   onScore,
-}: Readonly<{ onMove?: (event: MoveEvent) => void; onScore?: (total: number) => void }>) {
+}: Readonly<{ onMove?: (event: MoveEvent) => void; onScore?: (totals: ScoreTotals) => void }>) {
   const [card, setCard] = useState<CardState>(loadState)
   // Monotonic id stamped on each move so undo can name the exact move it reverts.
   const nextMoveId = useRef(0)
@@ -235,16 +227,16 @@ export function Scorecard({
     setConfirmingReset(false)
   }
 
-  const scores = SCORE_ROWS.map((r) => rowScore(card.marks[r.color]))
-  const penaltyTotal = card.penalties * PENALTY_VALUE
-  const grandTotal = scores.reduce((a, b) => a + b, 0) - penaltyTotal
+  // Memoized so it's computed once per card change and has a stable identity the
+  // report effect below can depend on (a fresh object would fire it every render).
+  const totals = useMemo(() => cardTotals(card.marks, card.penalties), [card])
   const anyMarks = SCORE_ROWS.some((r) => countMarks(card.marks[r.color]) > 0) || card.penalties > 0
   const canUndo = card.history.length > 0
 
-  // Report our running total so the app can share it in the other-players board.
+  // Report our running totals so the app can share them in the other-players board.
   useEffect(() => {
-    onScore?.(grandTotal)
-  }, [grandTotal, onScore])
+    onScore?.(totals)
+  }, [totals, onScore])
 
   return (
     <section className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-lg">
@@ -342,16 +334,7 @@ export function Scorecard({
       {/* Totals: red + yellow + green + blue − penalties = grand total. */}
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-4">
         <span className="mr-1 text-sm font-semibold text-zinc-600">Totals</span>
-        {SCORE_ROWS.map(({ color }, i) => (
-          <span key={color} className="flex items-center gap-2">
-            {i > 0 && <span className="text-zinc-400">+</span>}
-            <ScoreBox value={scores[i]} className={ROW_STYLES[color].total} />
-          </span>
-        ))}
-        <span className="text-zinc-400">−</span>
-        <ScoreBox value={penaltyTotal} className="bg-zinc-100 text-zinc-600 ring-zinc-300" />
-        <span className="text-zinc-400">=</span>
-        <ScoreBox value={grandTotal} className="bg-zinc-900 text-white ring-zinc-900" />
+        <TotalsRow totals={totals} />
       </div>
     </section>
   )

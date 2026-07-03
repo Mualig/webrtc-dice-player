@@ -133,6 +133,24 @@ export function rowScore(row: boolean[]): number {
   return ROW_POINTS[crosses]
 }
 
+// The score breakdown shown on the Totals line: each row's score (in SCORE_ROWS
+// order), the penalty deduction, and the grand total. Broadcast over the wire so
+// other players' boards can show the same breakdown, not just the final number.
+export type ScoreTotals = {
+  rows: number[]
+  penaltyTotal: number
+  total: number
+}
+
+export function cardTotals(marks: ScoreMarks, penalties: number): ScoreTotals {
+  const rows = SCORE_ROWS.map((r) => rowScore(marks[r.color]))
+  const penaltyTotal = penalties * PENALTY_VALUE
+  return { rows, penaltyTotal, total: rows.reduce((a, b) => a + b, 0) - penaltyTotal }
+}
+
+// A blank card's totals — the default for a player who hasn't reported yet.
+export const EMPTY_TOTALS: ScoreTotals = cardTotals(emptyMarks(), 0)
+
 // The number printed at a given position of a colored row (red/yellow ascend
 // 2→12, green/blue descend 12→2) — used to describe a move in the activity feed.
 export function cellNumber(color: RowColor, index: number): number {

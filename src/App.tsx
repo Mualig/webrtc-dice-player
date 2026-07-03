@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePeerSync } from './usePeerSync'
 import type { ActionEntry, Die, Message, Player, RollEntry } from './types'
-import type { MoveEvent } from './scorecard'
+import { EMPTY_TOTALS, type MoveEvent, type ScoreTotals } from './scorecard'
 import { DICE, PLAYER_COLOR_PALETTE, rollValue } from './dice'
 import { Dice } from './components/Dice'
 import { HistoryEntry } from './components/History'
@@ -49,10 +49,10 @@ function App() {
   const [color, setColor] = useState(() => localStorage.getItem(COLOR_KEY) ?? randomColor())
   const [players, setPlayers] = useState<Player[]>([])
   const [actions, setActions] = useState<ActionEntry[]>([])
-  // Our own scorecard total (reported by <Scorecard onScore>), and every player's
-  // total keyed by peer id (the host aggregates and broadcasts this).
-  const [myScore, setMyScore] = useState(0)
-  const [scores, setScores] = useState<Record<string, number>>({})
+  // Our own scorecard breakdown (reported by <Scorecard onScore>), and every
+  // player's breakdown keyed by peer id (the host aggregates and broadcasts this).
+  const [myTotals, setMyTotals] = useState(EMPTY_TOTALS)
+  const [scores, setScores] = useState<Record<string, ScoreTotals>>({})
   // Host-assigned id for the roll history (the host is its sole writer). Activity
   // entries instead key off the mover's own stable move id (see applyMove).
   const nextId = useRef(1)
@@ -113,7 +113,7 @@ function App() {
   // Commit the per-player scores locally; the host (authoritative) broadcasts
   // them. Memoized so the score-reporting effects can depend on it without churn.
   const updateScores = useCallback(
-    (next: Record<string, number>) => {
+    (next: Record<string, ScoreTotals>) => {
       scoresRef.current = next
       setScores(next)
       if (role === 'host') {
@@ -194,7 +194,7 @@ function App() {
       if (m.type === 'roll') performRoll(m.roller)
       else if (m.type === 'clear') clearHistory()
       else if (m.type === 'action') applyMove(m.actor, m.event)
-      else if (m.type === 'score') updateScores({ ...scoresRef.current, [m.id]: m.total })
+      else if (m.type === 'score') updateScores({ ...scoresRef.current, [m.id]: m.totals })
       else if (m.type === 'hello') {
         // We key the roster on the client's self-reported id, which PeerJS
         // guarantees equals the transport's `conn.peer` — so handleClientLeave
@@ -267,9 +267,9 @@ function App() {
   // Runs on connect and whenever our total changes.
   useEffect(() => {
     if (status !== 'connected' || !peerId) return
-    if (role === 'host') updateScores({ ...scoresRef.current, [peerId]: myScore })
-    else if (role === 'client') send({ type: 'score', id: peerId, total: myScore } satisfies Message)
-  }, [role, status, peerId, myScore, updateScores, send])
+    if (role === 'host') updateScores({ ...scoresRef.current, [peerId]: myTotals })
+    else if (role === 'client') send({ type: 'score', id: peerId, totals: myTotals } satisfies Message)
+  }, [role, status, peerId, myTotals, updateScores, send])
 
   const shareLink = roomCode
     ? `${window.location.origin}${window.location.pathname}?room=${roomCode}`
@@ -369,7 +369,7 @@ function App() {
       <div className="grid w-full max-w-7xl grid-cols-1 gap-6 xl:grid-cols-[minmax(0,48rem)_minmax(0,28rem)] xl:justify-center">
         {/* Lift the total only in a room — solo has no scoreboard, so skipping it
             avoids re-rendering the whole app on every cross/penalty/undo. */}
-        <Scorecard onMove={recordMove} onScore={role === 'solo' ? undefined : setMyScore} />
+        <Scorecard onMove={recordMove} onScore={role === 'solo' ? undefined : setMyTotals} />
         {/* Shared feed + other players' scores — only meaningful in a room. */}
         {role !== 'solo' && (
           <>

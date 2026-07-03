@@ -1,19 +1,27 @@
 import type { Player } from '../types'
+import { EMPTY_TOTALS, type ScoreTotals } from '../scorecard'
 import { displayName } from '../format'
+import { TotalsRow } from './TotalsRow'
 
-// A card showing the other players in the room and their live scorecard totals
-// (highest first). Your own score lives on your scorecard, so it's excluded here.
-// `scores` maps player id → total; a player with no reported score yet reads 0.
+// A card showing the other players in the room and their live score breakdowns
+// (highest total first), each rendered like the scorecard's own Totals line. Your
+// own score lives on your scorecard, so it's excluded here. `scores` maps player
+// id → breakdown; a player with nothing reported yet reads as a blank card.
 export function ScoreBoard({
   players,
   scores,
   selfId,
   className = '',
-}: Readonly<{ players: Player[]; scores: Record<string, number>; selfId: string; className?: string }>) {
+}: Readonly<{
+  players: Player[]
+  scores: Record<string, ScoreTotals>
+  selfId: string
+  className?: string
+}>) {
   const others = players
     .filter((p) => p.id !== selfId)
-    .map((p) => ({ player: p, score: scores[p.id] ?? 0 }))
-    .sort((a, b) => b.score - a.score)
+    .map((p) => ({ player: p, totals: scores[p.id] ?? EMPTY_TOTALS }))
+    .sort((a, b) => b.totals.total - a.totals.total)
 
   return (
     <section className={`w-full max-w-3xl rounded-2xl bg-white p-5 shadow-lg ${className}`}>
@@ -23,15 +31,15 @@ export function ScoreBoard({
           Waiting for other players to join…
         </p>
       ) : (
-        <ul className="flex flex-col gap-2">
-          {others.map(({ player, score }) => (
+        <ul className="flex flex-col gap-3">
+          {others.map(({ player, totals }) => (
             <li
               key={player.id}
               style={{ borderColor: player.color || 'transparent' }}
-              className="flex items-center justify-between gap-3 rounded-lg border-2 bg-zinc-50 px-3 py-2"
+              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg border-2 bg-zinc-50 px-3 py-2"
             >
               <span className="font-medium text-zinc-700">{displayName(player.name)}</span>
-              <span className="text-lg font-bold tabular-nums text-zinc-900">{score}</span>
+              <TotalsRow totals={totals} />
             </li>
           ))}
         </ul>
