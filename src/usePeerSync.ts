@@ -17,6 +17,12 @@ type Options = {
 
 // Prefix keeps our room ids from colliding with other apps on the public broker.
 const ROOM_PREFIX = 'webrtc-dice-player-room-'
+
+// The host registers under a deterministic id derived from the room code — it's
+// how clients dial the room, and how any peer can tell which player is the host.
+export function roomHostId(code: string) {
+  return ROOM_PREFIX + code
+}
 // Unambiguous charset (no 0/O, 1/I) so codes are easy to read out loud.
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 // How long to wait for the broker / peer handshake before giving up.
@@ -122,7 +128,7 @@ export function usePeerSync({ onMessage, onClientJoin, onClientLeave }: Options)
 
     const attempt = (triesLeft: number) => {
       const code = randomCode()
-      const id = ROOM_PREFIX + code
+      const id = roomHostId(code)
       console.log(LOG, 'host: registering id', id)
       const peer = new Peer(id, PEER_OPTIONS)
       peerRef.current = peer
@@ -215,7 +221,7 @@ export function usePeerSync({ onMessage, onClientJoin, onClientLeave }: Options)
         console.log(LOG, 'client: broker open as', id, '- dialing host')
         setPeerId(id)
         // Reliable + ordered delivery so full-state messages always arrive.
-        const conn = peer.connect(ROOM_PREFIX + code, { reliable: true })
+        const conn = peer.connect(roomHostId(code), { reliable: true })
         connectionsRef.current = [conn]
         conn.on('open', () => {
           connected = true

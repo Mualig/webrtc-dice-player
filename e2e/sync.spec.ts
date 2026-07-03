@@ -61,6 +61,18 @@ async function connectHostAndClient(browser: Browser): Promise<{ host: Page; cli
 test('host and client sync dice rolls in both directions', async ({ browser }) => {
   const { host, client } = await connectHostAndClient(browser)
 
+  // The client's roster tags who hosts the room, and who they are themselves.
+  const clientMenu = client.getByRole('dialog', { name: 'Menu' })
+  await client.getByRole('button', { name: 'Open menu' }).click()
+  await expect(clientMenu.getByRole('listitem').filter({ hasText: 'Alice' })).toContainText('(host)')
+  await expect(clientMenu.getByRole('listitem').filter({ hasText: 'Bob' })).toContainText('(you)')
+
+  // The menu footer links to the project's GitHub repo, opening in a new tab.
+  const github = clientMenu.getByRole('link', { name: 'View the project on GitHub' })
+  await expect(github).toHaveAttribute('href', 'https://github.com/Mualig/webrtc-dice-player')
+  await expect(github).toHaveAttribute('target', '_blank')
+  await client.keyboard.press('Escape')
+
   // --- Host rolls → both peers show the same roll, attributed to Alice ---
   await expect(host.getByText(/No rolls yet/)).toBeVisible()
   await host.getByRole('button', { name: 'Roll dice' }).click()

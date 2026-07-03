@@ -1,23 +1,33 @@
 import { useState } from 'react'
 import type { Player } from '../types'
-import type { PeerRole, PeerStatus } from '../usePeerSync'
+import { roomHostId, type PeerRole, type PeerStatus } from '../usePeerSync'
 import { displayName } from '../format'
 
-function Roster({ players, selfId }: Readonly<{ players: Player[]; selfId: string | null }>) {
+function Roster({
+  players,
+  selfId,
+  hostId,
+}: Readonly<{ players: Player[]; selfId: string | null; hostId: string | null }>) {
   if (players.length === 0) return null
   return (
     <ul className="mt-3 flex flex-wrap gap-2">
-      {players.map((player) => (
-        <li
-          key={player.id}
-          style={{ borderColor: player.color || 'transparent' }}
-          className="flex items-center gap-1.5 rounded-full border-2 bg-zinc-100 px-3 py-1 text-sm text-zinc-700"
-        >
-          <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-          {displayName(player.name)}
-          {player.id === selfId && <span className="text-zinc-400">(you)</span>}
-        </li>
-      ))}
+      {players.map((player) => {
+        // One merged tag — "(you)", "(host)", or "(you, host)" for a hosting self.
+        const tags = [player.id === selfId && 'you', player.id === hostId && 'host']
+          .filter(Boolean)
+          .join(', ')
+        return (
+          <li
+            key={player.id}
+            style={{ borderColor: player.color || 'transparent' }}
+            className="flex items-center gap-1.5 rounded-full border-2 bg-zinc-100 px-3 py-1 text-sm text-zinc-700"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+            {displayName(player.name)}
+            {tags && <span className="text-zinc-400">({tags})</span>}
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -64,6 +74,9 @@ export function ConnectionPanel({
   onCopy: () => void
 }>) {
   const [codeInput, setCodeInput] = useState('')
+  // The host's peer id is derived from the room code (see roomHostId), so the
+  // roster can tag the host without anything extra crossing the wire.
+  const hostId = roomCode ? roomHostId(roomCode) : null
 
   if (status === 'connecting') {
     return (
@@ -112,7 +125,7 @@ export function ConnectionPanel({
           <LeaveButton onLeave={onLeave} />
         </div>
         <p className="mt-2 truncate text-xs text-zinc-400">{shareLink}</p>
-        <Roster players={players} selfId={selfId} />
+        <Roster players={players} selfId={selfId} hostId={hostId} />
       </div>
     )
   }
@@ -130,7 +143,7 @@ export function ConnectionPanel({
           </span>
           <LeaveButton onLeave={onLeave} />
         </div>
-        <Roster players={players} selfId={selfId} />
+        <Roster players={players} selfId={selfId} hostId={hostId} />
       </div>
     )
   }
