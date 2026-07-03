@@ -226,6 +226,19 @@ describe('<Scorecard />', () => {
     expect(cell('yellow 2')).toBeEnabled() // an unlocked color is unaffected
   })
 
+  it('freezes marking and penalties once the game is over, but keeps Undo', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<Scorecard />)
+    await user.click(cell('red 7')) // leaves red 9 open and a move to undo
+    expect(cell('red 9')).toBeEnabled()
+
+    rerender(<Scorecard gameOver />)
+
+    expect(cell('red 9')).toBeDisabled() // the board is frozen
+    expect(cell('Penalty 1')).toBeDisabled()
+    expect(cell('Undo')).toBeEnabled() // the triggering misclick can still be taken back
+  })
+
   it('does not report no-op interactions', async () => {
     const user = userEvent.setup()
     const onMove = vi.fn()

@@ -174,6 +174,23 @@ export function lockedAcross(summaries: Record<string, CardSummary>): RowColor[]
   return [...new Set(Object.values(summaries).flatMap((s) => s.locked))]
 }
 
+// The most any player can lose to penalties — four at −5 each. Reaching it ends
+// the game, so it doubles as an end-of-game trigger.
+export const MAX_PENALTY_TOTAL = MAX_PENALTIES * PENALTY_VALUE
+
+// Why the game ended, or null while it's still going.
+export type GameOverReason = 'locks' | 'penalties'
+
+// The Qwixx end conditions, evaluated over the shared summaries: the game is over
+// once two rows are locked anywhere in the room, or any player has taken all four
+// penalties. Returns which condition ended it (so callers needn't re-derive it),
+// or null. Computed from the same summaries every peer holds, so all end together.
+export function gameOverReason(summaries: Record<string, CardSummary>): GameOverReason | null {
+  if (lockedAcross(summaries).length >= 2) return 'locks'
+  if (Object.values(summaries).some((s) => s.totals.penaltyTotal >= MAX_PENALTY_TOTAL)) return 'penalties'
+  return null
+}
+
 // The number printed at a given position of a colored row (red/yellow ascend
 // 2→12, green/blue descend 12→2) — used to describe a move in the activity feed.
 export function cellNumber(color: RowColor, index: number): number {

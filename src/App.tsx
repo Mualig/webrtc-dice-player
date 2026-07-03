@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePeerSync } from './usePeerSync'
 import type { ActionEntry, Die, Message, Player, RollEntry } from './types'
-import { EMPTY_SUMMARY, lockedAcross, type CardSummary, type MoveEvent } from './scorecard'
+import { EMPTY_SUMMARY, gameOverReason, lockedAcross, type CardSummary, type MoveEvent } from './scorecard'
 import { DICE, PLAYER_COLOR_PALETTE, rollValue } from './dice'
+import { displayName } from './format'
 import { Dice } from './components/Dice'
 import { HistoryEntry } from './components/History'
 import { ConnectionPanel } from './components/ConnectionPanel'
@@ -10,6 +11,7 @@ import { SidePanel } from './components/SidePanel'
 import { Scorecard } from './components/Scorecard'
 import { ActivityFeed } from './components/ActivityFeed'
 import { ScoreBoard } from './components/ScoreBoard'
+import { GameOverBanner } from './components/GameOverBanner'
 
 // The activity feed keeps only the most recent moves so the log — and the
 // message that broadcasts it — stays bounded over a long game.
@@ -322,6 +324,14 @@ function App() {
   // rolling and no one may mark that row. Union across every reported summary.
   const lockedColors = lockedAcross(summaries)
 
+  // End of game (Qwixx): two rows locked anywhere, or any player took all four
+  // penalties. Fold our own latest summary in so it triggers instantly — and so
+  // solo works, since solo never populates `summaries`. Every peer evaluates the
+  // same shared state, so the game ends for all of them at once.
+  const gameSummaries = { ...summaries, [selfId]: mySummary }
+  const endReason = gameOverReason(gameSummaries)
+  const gameOver = endReason !== null
+
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-10 bg-zinc-100 px-6 py-12">
       <SidePanel
@@ -354,6 +364,15 @@ function App() {
         </h1>
       </header>
 
+      {endReason && (
+        <GameOverBanner
+          summaries={gameSummaries}
+          selfId={selfId}
+          reason={endReason}
+          resolveName={(id) => displayName(playerById.get(id)?.name ?? '')}
+        />
+      )}
+
       <section className="grid grid-cols-3 gap-6 sm:grid-cols-6">
         {dice.map((die) => (
           <Dice
@@ -369,7 +388,7 @@ function App() {
         <button
           type="button"
           onClick={roll}
-          disabled={rolling || status === 'connecting'}
+          disabled={rolling || status === 'connecting' || gameOver}
           className="rounded-full bg-zinc-900 px-8 py-3 text-lg font-semibold text-white shadow-md transition hover:bg-zinc-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {rolling ? 'Rolling…' : 'Roll dice'}
@@ -381,13 +400,15 @@ function App() {
           players scoreboard and the dice history — the least important part — on
           the row beneath them. Everything stacks into one column on narrow screens. */}
       <div className="grid w-full max-w-7xl grid-cols-1 gap-6 xl:grid-cols-[minmax(0,48rem)_minmax(0,28rem)] xl:justify-center">
-        {/* Report our summary only in a room — solo has no scoreboard, so skipping
-            it avoids re-rendering the whole app on every cross/penalty/undo.
-            `lockedColors` closes rows locked by anyone in the room (empty solo). */}
+        {/* Always report our summary: the room needs it for the scoreboard and
+            shared locks, and every mode needs it to detect game over.
+            `lockedColors` closes rows locked by anyone in the room (empty solo);
+            `gameOver` freezes the card once the game ends. */}
         <Scorecard
           onMove={recordMove}
-          onReport={role === 'solo' ? undefined : setMySummary}
+          onReport={setMySummary}
           lockedColors={lockedColors}
+          gameOver={gameOver}
         />
         {/* Shared feed + other players' scores — only meaningful in a room. */}
         {role !== 'solo' && (

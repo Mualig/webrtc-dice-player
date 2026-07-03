@@ -132,3 +132,31 @@ test('locking a row takes that color out of play for everyone', async ({ browser
   await expect(client.getByRole('button', { name: 'red 9' })).toBeEnabled()
   await expect(client.getByText('red · locked')).toHaveCount(0)
 })
+
+test('the game ends for everyone when a player takes a fourth penalty', async ({ browser }) => {
+  const { host, client } = await connectHostAndClient(browser)
+
+  // Host fills their fourth penalty — a Qwixx end condition.
+  await host.getByRole('button', { name: 'Penalty 4' }).click()
+
+  // Both peers reach game over, and the board + roll are frozen on the client.
+  await expect(host.getByText('Game over')).toBeVisible()
+  await expect(client.getByText('Game over')).toBeVisible()
+  await expect(client.getByRole('button', { name: 'Roll dice' })).toBeDisabled()
+  await expect(client.getByRole('button', { name: 'red 2' })).toBeDisabled()
+
+  // The game-over banner ranks every player by final score: Bob (0) leads Alice,
+  // who is at −20 from the four penalties.
+  const board = client.getByRole('status')
+  const rows = board.getByRole('listitem')
+  await expect(rows).toHaveCount(2)
+  await expect(rows.first()).toContainText('Bob') // leader
+  await expect(rows.last()).toContainText('Alice')
+  await expect(rows.last()).toContainText('-20')
+
+  // Taking the penalty back resumes the game for everyone.
+  await host.getByRole('button', { name: 'Undo' }).click()
+  await expect(host.getByText('Game over')).toHaveCount(0)
+  await expect(client.getByText('Game over')).toHaveCount(0)
+  await expect(client.getByRole('button', { name: 'red 2' })).toBeEnabled()
+})

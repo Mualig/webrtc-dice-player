@@ -12,9 +12,12 @@ import {
   cellNumber,
   countMarks,
   emptyMarks,
+  gameOverReason,
   isLocked,
   lockedColors,
   rowScore,
+  type CardSummary,
+  type RowColor,
 } from './scorecard'
 
 // Build a row with the given positions crossed off.
@@ -166,6 +169,38 @@ describe('cardSummary', () => {
     expect(summary.totals.rows[0]).toBe(28) // red row score
     expect(summary.totals.penaltyTotal).toBe(PENALTY_VALUE)
     expect(summary.totals.total).toBe(28 - PENALTY_VALUE)
+  })
+})
+
+describe('gameOverReason', () => {
+  const withLocks = (...colors: RowColor[]): CardSummary => {
+    const marks = emptyMarks()
+    for (const c of colors) marks[c][LAST] = true
+    return cardSummary(marks, 0)
+  }
+  const withPenalties = (n: number): CardSummary => cardSummary(emptyMarks(), n)
+
+  it('is null for a fresh game', () => {
+    expect(gameOverReason({ a: withPenalties(0) })).toBeNull()
+  })
+
+  it('is null with only one row locked anywhere', () => {
+    expect(gameOverReason({ a: withLocks('red'), b: withPenalties(0) })).toBeNull()
+  })
+
+  it("ends with 'locks' once two rows are locked across the room", () => {
+    // Two players each locking one row…
+    expect(gameOverReason({ a: withLocks('red'), b: withLocks('green') })).toBe('locks')
+    // …or one player locking two.
+    expect(gameOverReason({ a: withLocks('red', 'blue') })).toBe('locks')
+  })
+
+  it("ends with 'penalties' when any player takes their fourth penalty", () => {
+    expect(gameOverReason({ a: withPenalties(3), b: withPenalties(MAX_PENALTIES) })).toBe('penalties')
+  })
+
+  it('does not end at three penalties', () => {
+    expect(gameOverReason({ a: withPenalties(3) })).toBeNull()
   })
 })
 

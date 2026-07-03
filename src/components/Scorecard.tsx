@@ -97,25 +97,31 @@ function Row({
   row,
   onMark,
   closed = false,
+  frozen = false,
 }: Readonly<{
   color: RowColor
   numbers: number[]
   row: boolean[]
   onMark: (color: RowColor, index: number) => void
   // True when this color is locked by *anyone* in the room — the row is out of
-  // play for everyone, so every cell (and the lock) is disabled.
+  // play for everyone, so every cell (and the lock) is disabled and shown locked.
   closed?: boolean
+  // True once the game has ended: every cell is disabled, but rows that aren't
+  // actually locked stay un-crossed (no misleading lock mark on the whole board).
+  frozen?: boolean
 }>) {
   const style = ROW_STYLES[color]
   const locked = isLocked(row)
-  const lockActive = !closed && canMark(row, LAST)
+  // The row takes no input when it's closed (locked room-wide) or frozen (game over).
+  const blocked = closed || frozen
+  const lockActive = !blocked && canMark(row, LAST)
 
   return (
     <div className={`flex items-center gap-1.5 rounded-xl p-1.5 ${style.bar}`}>
       <DirectionArrow />
       {numbers.map((n, i) => {
         const marked = row[i]
-        const interactive = !closed && canMark(row, i)
+        const interactive = !blocked && canMark(row, i)
         return (
           <button
             key={i}
@@ -159,11 +165,15 @@ export function Scorecard({
   onMove,
   onReport,
   lockedColors = [],
+  gameOver = false,
 }: Readonly<{
   onMove?: (event: MoveEvent) => void
   onReport?: (summary: CardSummary) => void
   // Colors locked by anyone in the room — those rows are closed for this card too.
   lockedColors?: RowColor[]
+  // True once the game has ended (see App): the board is frozen. Undo/Reset stay
+  // available so a triggering misclick can be taken back (which resumes play).
+  gameOver?: boolean
 }>) {
   const [card, setCard] = useState<CardState>(loadState)
   // Monotonic id stamped on each move so undo can name the exact move it reverts.
@@ -190,9 +200,10 @@ export function Scorecard({
   // event, so `card` is up to date) and report the move only when one happened.
   // onMove fires outside the setCard updater so the updater stays side-effect free.
   function mark(color: RowColor, index: number) {
-    // Guard the same rule the button enforces: nothing is dispatched for a cell
-    // whose color is closed (locked by anyone) or that isn't markable right now.
-    if (lockedColors.includes(color) || !canMark(card.marks[color], index)) return
+    // Guard the same rules the buttons enforce: nothing is dispatched once the
+    // game is over, or for a cell whose color is closed (locked by anyone), or
+    // that isn't markable right now.
+    if (gameOver || lockedColors.includes(color) || !canMark(card.marks[color], index)) return
     // One payload serves both the local revert (CardAction) and the broadcast
     // (LoggedMove) — the `mark` variant is identical in both.
     const move = { type: 'mark' as const, color, index }
@@ -206,6 +217,7 @@ export function Scorecard({
   }
 
   function togglePenalty(index: number) {
+    if (gameOver) return
     // Clicking a box fills up to it, or clears it and everything after. Decide
     // the new count once (each click is its own event, so `card` is current).
     const next = index < card.penalties ? index : index + 1
@@ -323,6 +335,7 @@ export function Scorecard({
               row={card.marks[color]}
               onMark={mark}
               closed={lockedColors.includes(color)}
+              frozen={gameOver}
             />
           ))}
         </div>
@@ -338,10 +351,11 @@ export function Scorecard({
               key={i}
               type="button"
               onClick={() => togglePenalty(i)}
+              disabled={gameOver}
               aria-pressed={active}
               aria-label={`Penalty ${i + 1}`}
               className={`relative flex h-8 w-8 items-center justify-center rounded-md border-2 transition ${
-                active ? 'border-zinc-800 text-zinc-800' : 'border-zinc-300 text-transparent hover:border-zinc-500'
+                active ? 'border-zinc-800 text-zinc-800' : 'border-zinc-300 text-transparent enabled:hover:border-zinc-500'
               }`}
             >
               {active && <Cross className="text-zinc-800" />}
