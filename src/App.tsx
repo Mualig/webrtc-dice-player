@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePeerSync } from './usePeerSync';
 import type { ActionEntry, Die, Message, Player, RollEntry } from './types';
-import { type CardSummary, EMPTY_SUMMARY, gameOverReason, lockedAcross, type MoveEvent } from './scorecard';
+import {
+  type CardSummary,
+  EMPTY_SUMMARY,
+  type Ending,
+  gameOverReason,
+  lockedAcross,
+  type MoveEvent,
+  type RowColor,
+} from './scorecard';
 import {
   addGame,
   type GameRecord,
@@ -20,6 +28,7 @@ import { Scorecard } from './components/Scorecard';
 import { ActivityFeed } from './components/ActivityFeed';
 import { ScoreBoard } from './components/ScoreBoard';
 import { GameOverBanner } from './components/GameOverBanner';
+import { FinalTurnBanner } from './components/FinalTurnBanner';
 import { NewGameButton } from './components/NewGameButton';
 import { GameHistory } from './components/GameHistory';
 import { EmptyHint } from './components/EmptyHint';
@@ -34,6 +43,10 @@ const COLOR_KEY = 'webrtc-dice-player-player-color';
 // Stable empty standings while the game is running, so the memo below doesn't
 // hand the recording effect a fresh [] on every score update.
 const NO_STANDINGS: PlayerResult[] = [];
+
+// The end-of-game handshake at rest (see Ending in scorecard.ts). The host is
+// authoritative for it and broadcasts it via 'ending' messages.
+const IDLE_ENDING: Ending = {ready: [], over: null};
 
 // Players are assigned one of the dice colors by default; the picker still lets
 // them choose any color afterwards.
@@ -71,6 +84,14 @@ function App() {
   // host aggregates and broadcasts these).
   const [mySummary, setMySummary] = useState(EMPTY_SUMMARY);
   const [summaries, setSummaries] = useState<Record<string, CardSummary>>({});
+  // The locks *in effect* — snapshotted from the shared summaries at each roll,
+  // so a freshly-reported lock never cuts off players still marking the current
+  // roll: its row closes and its die retires only when the next roll starts
+  // (deferred, exactly like the paper rules). Host-authoritative, carried on the
+  // 'state' message alongside the dice it applies to.
+  const [activeLocks, setActiveLocks] = useState<RowColor[]>([]);
+  // The end-of-game handshake (see Ending above). Host-authoritative.
+  const [ending, setEnding] = useState<Ending>(IDLE_ENDING);
   // Bumped to tell our own <Scorecard> to clear itself for a new game (see below).
   const [newGameSignal, setNewGameSignal] = useState(0);
   // Finished games recorded on this device (newest first), browsable in a
@@ -90,6 +111,9 @@ function App() {
   const playersRef = useRef(players);
   const actionsRef = useRef(actions);
   const summariesRef = useRef(summaries);
+  const mySummaryRef = useRef(mySummary);
+  const activeLocksRef = useRef(activeLocks);
+  const endingRef = useRef(ending);
   const gameHistoryRef = useRef(gameHistory);
 
   // `handleMessage`/`handleClientJoin`/`handleClientLeave` are hoisted and only
@@ -113,15 +137,17 @@ function App() {
   // lookup map below (and everything derived from it) stays stable.
   const me: Player = useMemo(() => ({id: selfId, name: myName, color}), [selfId, myName, color]);
 
-  // Commit new dice/history locally. The host is authoritative, so every state
-  // change is broadcast to clients from this single point.
-  function applyState(nextDice: Die[], nextHistory: RollEntry[]) {
+  // Commit new dice/history/effective-locks locally. The host is authoritative,
+  // so every state change is broadcast to clients from this single point.
+  function applyState(nextDice: Die[], nextHistory: RollEntry[], nextLocked: RowColor[]) {
     diceRef.current = nextDice;
     historyRef.current = nextHistory;
+    activeLocksRef.current = nextLocked;
     setDice(nextDice);
     setHistory(nextHistory);
+    setActiveLocks(nextLocked);
     if (role === 'host') {
-      send({type: 'state', dice: nextDice, history: nextHistory} satisfies Message);
+      send({type: 'state', dice: nextDice, history: nextHistory, locked: nextLocked});
     }
   }
 
@@ -132,7 +158,7 @@ function App() {
       playersRef.current = nextPlayers;
       setPlayers(nextPlayers);
       if (role === 'host') {
-        send({type: 'roster', players: nextPlayers} satisfies Message);
+        send({type: 'roster', players: nextPlayers});
       }
     },
     [role, send],
@@ -145,10 +171,63 @@ function App() {
       summariesRef.current = next;
       setSummaries(next);
       if (role === 'host') {
-        send({type: 'scores', scores: next} satisfies Message);
+        send({type: 'scores', scores: next});
       }
     },
     [role, send],
+  );
+
+  // Commit the ending handshake locally; the host (authoritative) broadcasts it.
+  const updateEnding = useCallback(
+    (next: Ending) => {
+      endingRef.current = next;
+      setEnding(next);
+      if (role === 'host') {
+        send({type: 'ending', ...next});
+      }
+    },
+    [role, send],
+  );
+
+  // Our card's report (from <Scorecard onReport>) — mirrored into a ref so the
+  // roll/ending logic can read the very latest card synchronously.
+  const reportSummary = useCallback((summary: CardSummary) => {
+    mySummaryRef.current = summary;
+    setMySummary(summary);
+  }, []);
+
+  // The shared summaries plus our own latest card — the full room state, read
+  // synchronously (solo never populates `summaries`, and the host's own entry
+  // there can lag a render behind the card).
+  const summariesWithSelf = useCallback(
+    () => ({...summariesRef.current, [selfId]: mySummaryRef.current}),
+    [selfId],
+  );
+
+  // Host-only: recompute the ending handshake from the shared summaries, the
+  // roster and the given confirmations. No end condition → clear it: an Undo took
+  // the trigger back, cancelling the final turn (or reopening a declared end —
+  // Undo has always been able to take back a game over). Otherwise the game is
+  // declared over once every rostered player has confirmed; a declared end then
+  // stands — someone joining the room afterwards must not reopen it. Recomputes
+  // fire on every summary or roster change, so an unchanged handshake is left
+  // alone rather than re-committed and re-broadcast to the whole room.
+  const reconcileEnding = useCallback(
+    (readyIds: string[]) => {
+      const reason = gameOverReason(summariesWithSelf());
+      if (!reason) {
+        if (endingRef.current.ready.length || endingRef.current.over) updateEnding(IDLE_ENDING);
+        return;
+      }
+      const current = endingRef.current;
+      if (current.over) return;
+      const ready = [...new Set(readyIds)].filter((id) => playersRef.current.some((p) => p.id === id));
+      const everyone = playersRef.current.length > 0 && playersRef.current.every((p) => ready.includes(p.id));
+      const over = everyone ? reason : null;
+      if (over === current.over && ready.length === current.ready.length && ready.every((id) => current.ready.includes(id))) return;
+      updateEnding({ready, over});
+    },
+    [summariesWithSelf, updateEnding],
   );
 
   // Commit the recorded-games list locally and persist it — localStorage is its
@@ -174,7 +253,7 @@ function App() {
     actionsRef.current = next;
     setActions(next);
     if (role === 'host') {
-      send({type: 'actions', actions: next} satisfies Message);
+      send({type: 'actions', actions: next});
     }
   }
 
@@ -197,17 +276,21 @@ function App() {
   // shared feed, so there is nothing to track.
   function recordMove(event: MoveEvent) {
     if (role === 'host') applyMove(me, event);
-    else if (role === 'client') send({type: 'action', actor: me, event} satisfies Message);
+    else if (role === 'client') send({type: 'action', actor: me, event});
   }
 
   // Generate a roll locally and (if hosting) broadcast it. Only ever runs on
   // the authoritative peer — solo or host. `roller` attributes it to a player.
   function performRoll(roller: Player) {
+    // No new roll once the end condition holds: the final turn is being played
+    // out on the current dice (and rolling is what makes pending locks bite).
+    if (gameOverReason(summariesWithSelf())) return;
     setRolling(true);
-    if (role === 'host') send({type: 'rolling'} satisfies Message);
+    if (role === 'host') send({type: 'rolling'});
     setTimeout(() => {
-      // A locked color's die is out of play: keep its current face, roll the rest.
-      const locked = lockedAcross(summariesRef.current);
+      // This roll is where reported locks take effect: snapshot them as the new
+      // active set. A locked color's die is out of play — keep its face.
+      const locked = lockedAcross(summariesWithSelf());
       const rolled = diceRef.current.map((d) =>
         d.color !== 'white' && locked.includes(d.color) ? d : {...d, value: rollValue()},
       );
@@ -215,7 +298,7 @@ function App() {
         {id: nextId.current++, dice: rolled, roller},
         ...historyRef.current,
       ];
-      applyState(rolled, nextHistory);
+      applyState(rolled, nextHistory, locked);
       setRolling(false);
     }, 500);
   }
@@ -223,7 +306,7 @@ function App() {
   function roll() {
     if (status === 'connecting') return;
     if (role === 'client') {
-      send({type: 'roll', roller: me} satisfies Message);
+      send({type: 'roll', roller: me});
       return;
     }
     performRoll(me);
@@ -231,10 +314,10 @@ function App() {
 
   function clearHistory() {
     if (role === 'client') {
-      send({type: 'clear'} satisfies Message);
+      send({type: 'clear'});
       return;
     }
-    applyState(diceRef.current, []);
+    applyState(diceRef.current, [], activeLocksRef.current);
   }
 
   // Start a fresh game for the whole room. A client asks the host; the host (or a
@@ -243,7 +326,7 @@ function App() {
   // the derived game-over state clears itself.
   function newGame() {
     if (role === 'client') {
-      send({type: 'newgame'} satisfies Message);
+      send({type: 'newgame'});
       return;
     }
     performNewGame();
@@ -253,11 +336,22 @@ function App() {
     commitSavedGame(); // the recorded result stands — this reset is not an Undo
     // Tell clients first: they must commit their own record of the ended game
     // before the clearing broadcasts below make their game-over state vanish.
-    if (role === 'host') send({type: 'newgame'} satisfies Message);
+    if (role === 'host') send({type: 'newgame'});
     applyActions([]);
     updateSummaries({});
-    applyState(diceRef.current, []);
+    updateEnding(IDLE_ENDING);
+    applyState(diceRef.current, [], []);
     setNewGameSignal((n) => n + 1); // reset our own scorecard
+  }
+
+  // Confirm we're done marking the final turn. The host applies it directly
+  // (completing the handshake if we were the last); a client asks the host.
+  function markDone() {
+    if (role === 'client') {
+      send({type: 'done', id: selfId});
+      return;
+    }
+    reconcileEnding([...endingRef.current.ready, selfId]);
   }
 
   // The record of the game that ended most recently, while its game-over is still
@@ -270,45 +364,63 @@ function App() {
     if (savedGameRef.current) savedGameRef.current = 'committed';
   }
 
-  function handleMessage(msg: unknown) {
-    const m = msg as Message;
-    if (role === 'host') {
-      if (m.type === 'roll') performRoll(m.roller);
-      else if (m.type === 'clear') clearHistory();
-      else if (m.type === 'newgame') performNewGame();
-      else if (m.type === 'action') applyMove(m.actor, m.event);
-      else if (m.type === 'score') updateSummaries({...summariesRef.current, [m.id]: m.summary});
-      else if (m.type === 'hello') {
-        // We key the roster on the client's self-reported id, which PeerJS
-        // guarantees equals the transport's `conn.peer` — so handleClientLeave
-        // (which only has `conn.peer`) can later remove this same entry.
-        updateRoster(upsertPlayer(playersRef.current, m.id, m.name, m.color));
-      }
-    } else if (role === 'client') {
-      if (m.type === 'rolling') setRolling(true);
-      else if (m.type === 'state') {
-        setRolling(false);
-        applyState(m.dice, m.history);
-      } else if (m.type === 'roster') {
-        updateRoster(m.players);
-      } else if (m.type === 'actions') {
-        applyActions(m.actions);
-      } else if (m.type === 'scores') {
-        updateSummaries(m.scores);
-      } else if (m.type === 'newgame') {
-        commitSavedGame(); // the recorded result stands — this reset is not an Undo
-        setNewGameSignal((n) => n + 1); // reset our scorecard for the new game
-      }
+  // Messages arrive already validated — usePeerSync shape-checks every payload
+  // at the trust boundary and drops anything malformed before it gets here.
+  function handleMessage(m: Message) {
+    if (role === 'host') handleHostMessage(m);
+    else if (role === 'client') handleClientMessage(m);
+  }
+
+  // Host: apply a client's intent and relay the result to the room.
+  function handleHostMessage(m: Message) {
+    if (m.type === 'roll') performRoll(m.roller);
+    else if (m.type === 'clear') clearHistory();
+    else if (m.type === 'newgame') performNewGame();
+    else if (m.type === 'action') applyMove(m.actor, m.event);
+    else if (m.type === 'score') updateSummaries({...summariesRef.current, [m.id]: m.summary});
+    else if (m.type === 'done') reconcileEnding([...endingRef.current.ready, m.id]);
+    else if (m.type === 'hello') {
+      // We key the roster on the client's self-reported id, which PeerJS
+      // guarantees equals the transport's `conn.peer` — so handleClientLeave
+      // (which only has `conn.peer`) can later remove this same entry.
+      updateRoster(upsertPlayer(playersRef.current, m.id, m.name, m.color));
+    }
+  }
+
+  // Client: adopt the host's authoritative broadcasts.
+  function handleClientMessage(m: Message) {
+    if (m.type === 'rolling') setRolling(true);
+    else if (m.type === 'state') {
+      setRolling(false);
+      applyState(m.dice, m.history, m.locked);
+    } else if (m.type === 'roster') {
+      updateRoster(m.players);
+    } else if (m.type === 'actions') {
+      applyActions(m.actions);
+    } else if (m.type === 'scores') {
+      updateSummaries(m.scores);
+    } else if (m.type === 'ending') {
+      updateEnding({ready: m.ready, over: m.over});
+    } else if (m.type === 'newgame') {
+      commitSavedGame(); // the recorded result stands — this reset is not an Undo
+      updateEnding(IDLE_ENDING); // clear right away rather than wait for the host's broadcast
+      setNewGameSignal((n) => n + 1); // reset our scorecard for the new game
     }
   }
 
   // Host: bring a newly-connected client up to date with current state, roster,
-  // the shared activity log and every player's score.
+  // the shared activity log, every player's score and the ending handshake.
   function handleClientJoin() {
-    send({type: 'state', dice: diceRef.current, history: historyRef.current} satisfies Message);
-    send({type: 'roster', players: playersRef.current} satisfies Message);
-    send({type: 'actions', actions: actionsRef.current} satisfies Message);
-    send({type: 'scores', scores: summariesRef.current} satisfies Message);
+    send({
+      type: 'state',
+      dice: diceRef.current,
+      history: historyRef.current,
+      locked: activeLocksRef.current,
+    });
+    send({type: 'roster', players: playersRef.current});
+    send({type: 'actions', actions: actionsRef.current});
+    send({type: 'scores', scores: summariesRef.current});
+    send({type: 'ending', ...endingRef.current});
   }
 
   // Host: drop a disconnected client from the roster and the scoreboard.
@@ -345,7 +457,7 @@ function App() {
   // Client: announce our identity + name + color on connect and whenever it changes.
   useEffect(() => {
     if (role === 'client' && status === 'connected' && peerId) {
-      send({type: 'hello', id: peerId, name: myName, color} satisfies Message);
+      send({type: 'hello', id: peerId, name: myName, color});
     }
   }, [role, status, peerId, myName, color, send]);
 
@@ -354,8 +466,17 @@ function App() {
   useEffect(() => {
     if (status !== 'connected' || !peerId) return;
     if (role === 'host') updateSummaries({...summariesRef.current, [peerId]: mySummary});
-    else if (role === 'client') send({type: 'score', id: peerId, summary: mySummary} satisfies Message);
+    else if (role === 'client') send({type: 'score', id: peerId, summary: mySummary});
   }, [role, status, peerId, mySummary, updateSummaries, send]);
+
+  // Host: drive the ending handshake as the shared state changes — a reported
+  // summary can start the final turn (or cancel it, after an undo), and a roster
+  // change can complete it (the last unconfirmed player leaving must not stall
+  // the end). 'done' confirmations are folded in by handleHostMessage directly.
+  useEffect(() => {
+    if (role !== 'host') return;
+    reconcileEnding(endingRef.current.ready);
+  }, [role, summaries, players, reconcileEnding]);
 
   const shareLink = roomCode
     ? `${window.location.origin}${window.location.pathname}?room=${roomCode}`
@@ -369,7 +490,7 @@ function App() {
   }
 
   // Reset presence and activity when (re)starting or leaving a session, so stale
-  // players or moves from a previous room never linger into the next one.
+  // players, moves or locks from a previous room never linger into the next one.
   function resetSession() {
     commitSavedGame(); // leaving a shown game-over keeps its recorded result
     playersRef.current = [];
@@ -378,6 +499,10 @@ function App() {
     setActions([]);
     summariesRef.current = {};
     setSummaries({});
+    activeLocksRef.current = [];
+    setActiveLocks([]);
+    endingRef.current = IDLE_ENDING;
+    setEnding(IDLE_ENDING);
   }
 
   function startHosting() {
@@ -407,20 +532,23 @@ function App() {
   }, [players, me]);
   const resolvePlayer = (snapshot: Player): Player => playerById.get(snapshot.id) ?? snapshot;
 
-  // Colors any player has locked are out of play for everyone: their die stops
-  // rolling and no one may mark that row. Union across every reported summary.
-  const lockedColors = lockedAcross(summaries);
-
   // End of game (Qwixx): two rows locked anywhere, or any player took all four
   // penalties. Fold our own latest summary in so it triggers instantly — and so
   // solo works, since solo never populates `summaries`. Every peer evaluates the
-  // same shared state, so the game ends for all of them at once.
+  // same shared state, so the whole room enters the final turn at once.
   const gameSummaries = useMemo(
     () => ({...summaries, [selfId]: mySummary}),
     [summaries, selfId, mySummary],
   );
-  const endReason = gameOverReason(gameSummaries);
+  // The end condition, live. In a room it only *starts* the final turn — the game
+  // truly ends when every player has confirmed (the host then declares it via
+  // `ending.over`). Solo there is no one to wait for: the condition ends it.
+  const pendingReason = gameOverReason(gameSummaries);
+  const endReason = role === 'solo' ? pendingReason : ending.over;
   const gameOver = endReason !== null;
+  // The final turn: the end condition holds, but not everyone has confirmed yet.
+  // Null otherwise — the reason doubles as the flag.
+  const finishingReason = gameOver ? null : pendingReason;
 
   // Final standings (highest total first) once the game has ended — rendered in
   // the game-over banner and recorded to this device's history. Memoized so the
@@ -515,6 +643,15 @@ function App() {
       </header>
 
       {endReason && <GameOverBanner players={standings} reason={endReason} onNewGame={newGame}/>}
+      {/* The final turn: everyone finishes marking the current roll, then confirms. */}
+      {finishingReason && (
+        <FinalTurnBanner
+          reason={finishingReason}
+          confirmed={ending.ready.includes(selfId)}
+          waitingOn={players.filter((p) => !ending.ready.includes(p.id)).map((p) => displayName(p.name))}
+          onDone={markDone}
+        />
+      )}
 
       <section className="grid grid-cols-3 gap-6 sm:grid-cols-6">
         {dice.map((die) => (
@@ -522,7 +659,7 @@ function App() {
             key={die.id}
             die={die}
             rolling={rolling}
-            disabled={die.color !== 'white' && lockedColors.includes(die.color)}
+            disabled={die.color !== 'white' && activeLocks.includes(die.color)}
           />
         ))}
       </section>
@@ -531,7 +668,7 @@ function App() {
         <button
           type="button"
           onClick={roll}
-          disabled={rolling || status === 'connecting' || gameOver}
+          disabled={rolling || status === 'connecting' || gameOver || finishingReason !== null}
           className="rounded-full bg-zinc-900 px-8 py-3 text-lg font-semibold text-white shadow-md transition hover:bg-zinc-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {rolling ? 'Rolling…' : 'Roll dice'}
@@ -546,12 +683,14 @@ function App() {
         className="grid w-full max-w-7xl grid-cols-1 gap-6 xl:grid-cols-[minmax(0,48rem)_minmax(0,28rem)] xl:justify-center">
         {/* Always report our summary: the room needs it for the scoreboard and
             shared locks, and every mode needs it to detect game over.
-            `lockedColors` closes rows locked by anyone in the room (empty solo);
+            `lockedColors` closes rows whose lock is in effect (snapshotted at the
+            last roll — a lock reported since stays open until the next one, so
+            everyone can finish the current roll, even locking the same row);
             `gameOver` freezes the card once the game ends. */}
         <Scorecard
           onMove={recordMove}
-          onReport={setMySummary}
-          lockedColors={lockedColors}
+          onReport={reportSummary}
+          lockedColors={activeLocks}
           gameOver={gameOver}
           newGameSignal={newGameSignal}
         />

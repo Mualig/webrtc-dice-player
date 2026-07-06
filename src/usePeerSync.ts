@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Peer } from 'peerjs'
 import type { DataConnection, PeerError } from 'peerjs'
+import { parseMessage } from './types'
+import type { Message } from './types'
 
 export type PeerRole = 'solo' | 'host' | 'client'
 export type PeerStatus = 'idle' | 'connecting' | 'connected' | 'error'
 
 type Options = {
-  // Called for every message received from another peer.
-  onMessage: (msg: unknown) => void
+  // Called for every well-formed message received from another peer (malformed
+  // wire data is dropped here, at the trust boundary — see `deliver`).
+  onMessage: (msg: Message) => void
   // Host-only: a new client just finished connecting (good time to push state).
   onClientJoin: () => void
   // Host-only: a client disconnected; receives that peer's id so presence can
@@ -97,6 +100,15 @@ export function usePeerSync({ onMessage, onClientJoin, onClientLeave }: Options)
     setPeerCount(connectionsRef.current.length)
   }, [])
 
+  // Wire data is untrusted — a buggy (or hostile) peer can send anything — so
+  // every payload is shape-checked right where it enters, and anything malformed
+  // is dropped before it can reach the app.
+  const deliver = useCallback((data: unknown) => {
+    const msg = parseMessage(data)
+    if (msg) onMessageRef.current(msg)
+    else console.warn(LOG, 'dropped malformed message', data)
+  }, [])
+
   // Host side: wire up a freshly accepted client connection.
   const registerHostConnection = useCallback(
     (conn: DataConnection) => {
@@ -105,7 +117,7 @@ export function usePeerSync({ onMessage, onClientJoin, onClientLeave }: Options)
         setPeerCount(connectionsRef.current.length)
         onClientJoinRef.current()
       })
-      conn.on('data', (data) => onMessageRef.current(data))
+      conn.on('data', deliver)
       conn.on('close', () => {
         console.log(LOG, 'host: client left', conn.peer)
         onClientLeaveRef.current(conn.peer)
@@ -117,7 +129,7 @@ export function usePeerSync({ onMessage, onClientJoin, onClientLeave }: Options)
         dropConnection(conn)
       })
     },
-    [dropConnection],
+    [dropConnection, deliver],
   )
 
   const createRoom = useCallback(() => {
@@ -231,7 +243,7 @@ export function usePeerSync({ onMessage, onClientJoin, onClientLeave }: Options)
           setStatus('connected')
           setPeerCount(1)
         })
-        conn.on('data', (data) => onMessageRef.current(data))
+        conn.on('data', deliver)
         conn.on('close', () => {
           console.warn(LOG, 'client: connection closed')
           if (peerRef.current === peer) {
@@ -260,11 +272,11 @@ export function usePeerSync({ onMessage, onClientJoin, onClientLeave }: Options)
         }
       })
     },
-    [teardown],
+    [teardown, deliver],
   )
 
   // Host: broadcast to all clients. Client: send to the host. Solo: no-op.
-  const send = useCallback((msg: unknown) => {
+  const send = useCallback((msg: Message) => {
     connectionsRef.current.forEach((conn) => {
       if (conn.open) conn.send(msg)
     })

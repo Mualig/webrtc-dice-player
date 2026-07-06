@@ -27,6 +27,13 @@ function diceValues(row: Locator): Promise<string[]> {
   return row.locator('span').filter({ hasText: /^[1-6]$/ }).allInnerTexts()
 }
 
+// Lock a row: cross off 2–6 to satisfy the five-cross threshold, then cross
+// the lock itself.
+async function lockRow(page: Page, color: 'red' | 'yellow') {
+  for (const n of [2, 3, 4, 5, 6]) await page.getByRole('button', { name: `${color} ${n}` }).click()
+  await page.getByRole('button', { name: `Lock ${color} row` }).click()
+}
+
 // Bring up a connected host (Alice) + client (Bob) in isolated contexts (so
 // their localStorage — name/color/scorecard — never overlaps), returning both
 // pages with the drawers closed and the roster settled.
@@ -123,42 +130,104 @@ test("scorecard moves appear in each player's activity feed", async ({ browser }
   await expect(activity(host).first()).toHaveClass(/line-through/)
 })
 
-test('locking a row takes that color out of play for everyone', async ({ browser }) => {
+test('a lock takes that color out of play only at the next roll', async ({ browser }) => {
   const { host, client } = await connectHostAndClient(browser)
 
-  // Host locks red: five crosses satisfy the threshold, then cross the lock.
-  for (const n of [2, 3, 4, 5, 6]) await host.getByRole('button', { name: `red ${n}` }).click()
-  await host.getByRole('button', { name: 'Lock red row' }).click()
+  // Host locks red.
+  await lockRow(host, 'red')
 
-  // The client's own red row is now closed — its cells and lock are disabled —
-  // even though the client never touched red.
-  await expect(client.getByRole('button', { name: 'red 9' })).toBeDisabled()
-  await expect(client.getByRole('button', { name: 'Lock red row' })).toBeDisabled()
+  // The lock has reached the client (Alice's synced score: five crosses + the
+  // locking cross + its bonus = 28) but is pending, not in effect: no die
+  // retires, and the client may still use the current roll on red.
+  await expect(scoreboard(client).filter({ hasText: 'Alice' })).toContainText('28')
+  await expect(host.getByText('red · locked')).toHaveCount(0)
+  await client.getByRole('button', { name: 'red 9' }).click()
 
-  // The red die is out of play (greyed + labelled) on both peers.
+  // The next roll puts the lock into effect for everyone: the red die is out of
+  // play (greyed + labelled) and the row closes on both peers.
+  await client.getByRole('button', { name: 'Roll dice' }).click()
   await expect(client.getByText('red · locked')).toBeVisible()
   await expect(host.getByText('red · locked')).toBeVisible()
+  await expect(client.getByRole('button', { name: 'red 10' })).toBeDisabled()
 
-  // Undoing the lock re-opens the color everywhere.
+  // Undoing the lock frees the color again — from the next roll, since the room
+  // plays on the lock snapshot taken when the dice were last rolled.
   await host.getByRole('button', { name: 'Undo' }).click()
-  await expect(client.getByRole('button', { name: 'red 9' })).toBeEnabled()
+  await expect(scoreboard(client).filter({ hasText: 'Alice' })).toContainText('15')
+  await expect(client.getByText('red · locked')).toBeVisible() // unchanged until a roll
+  await host.getByRole('button', { name: 'Roll dice' }).click()
   await expect(client.getByText('red · locked')).toHaveCount(0)
+  await expect(client.getByRole('button', { name: 'red 10' })).toBeEnabled()
 })
 
-test('the game ends for everyone when a player takes a fourth penalty', async ({ browser }) => {
+test('both players can lock the same row on the same roll', async ({ browser }) => {
   const { host, client } = await connectHostAndClient(browser)
 
-  // Host takes four penalties, one at a time — the fourth ends the game.
+  // Host locks red… (waiting for the sync so the client locks second)
+  await lockRow(host, 'red')
+  await expect(scoreboard(client).filter({ hasText: 'Alice' })).toContainText('28')
+
+  // …and the client — far from being locked out — locks red on the same roll,
+  // earning the lock bonus too, exactly like the paper game.
+  await lockRow(client, 'red')
+  await expect(scoreboard(host).filter({ hasText: 'Bob' })).toContainText('28')
+
+  // The next roll retires red everywhere; one color, however many lockers, is
+  // still only one lock — the game does not start ending.
+  await host.getByRole('button', { name: 'Roll dice' }).click()
+  await expect(client.getByText('red · locked')).toBeVisible()
+  await expect(host.getByText('red · locked')).toBeVisible()
+  await expect(host.getByText('Final turn')).toHaveCount(0)
+})
+
+test('a second locked color starts the final turn instead of cutting players off', async ({ browser }) => {
+  const { host, client } = await connectHostAndClient(browser)
+
+  // Host locks red; client locks yellow on the same roll (concurrently — the
+  // two pages are independent) — two locked colors meet the end condition, but
+  // nobody is frozen out: the final turn begins.
+  await Promise.all([lockRow(host, 'red'), lockRow(client, 'yellow')])
+
+  await expect(host.getByText('Two rows are locked.')).toBeVisible()
+  await expect(client.getByText('Two rows are locked.')).toBeVisible()
+
+  // Cards stay open through the final turn: the host grabs one more yellow cross
+  // (the yellow lock is pending, so the row still takes marks), then both confirm.
+  await host.getByRole('button', { name: 'yellow 10' }).click()
+  await host.getByRole('button', { name: 'I’m done' }).click()
+  await client.getByRole('button', { name: 'I’m done' }).click()
+  await expect(host.getByText('Game over')).toBeVisible()
+  await expect(host.getByText('Two rows were locked.')).toBeVisible()
+})
+
+test('a fourth penalty starts the final turn; the game ends once everyone is done', async ({ browser }) => {
+  const { host, client } = await connectHostAndClient(browser)
+
+  // Host takes four penalties, one at a time — the fourth meets the end condition.
   for (const n of [1, 2, 3, 4]) await host.getByRole('button', { name: `Penalty ${n}` }).click()
 
-  // Both peers reach game over, and the board + roll are frozen on the client.
+  // Instead of ending instantly, both peers enter the final turn: no new roll can
+  // start, but the cards stay open so everyone can finish marking the current one.
+  await expect(host.getByText('Final turn')).toBeVisible()
+  await expect(client.getByText(/fourth penalty/)).toBeVisible()
+  await expect(client.getByRole('button', { name: 'Roll dice' })).toBeDisabled()
+
+  // The client squeezes in a last cross and confirms; the host hasn't yet, so the
+  // game is still not over and the banner names who the room is waiting on.
+  await client.getByRole('button', { name: 'red 2' }).click()
+  await client.getByRole('button', { name: 'I’m done' }).click()
+  await expect(client.getByText('Waiting for Alice')).toBeVisible()
+  await expect(host.getByText('Game over')).toHaveCount(0)
+
+  // The host confirms too — now the game ends for everyone and the boards freeze.
+  await host.getByRole('button', { name: 'I’m done' }).click()
   await expect(host.getByText('Game over')).toBeVisible()
   await expect(client.getByText('Game over')).toBeVisible()
   await expect(client.getByRole('button', { name: 'Roll dice' })).toBeDisabled()
-  await expect(client.getByRole('button', { name: 'red 2' })).toBeDisabled()
+  await expect(client.getByRole('button', { name: 'red 5' })).toBeDisabled()
 
-  // The game-over banner ranks every player by final score: Bob (0) leads Alice,
-  // who is at −20 from the four penalties.
+  // The game-over banner ranks every player by final score: Bob (1, from his
+  // final-turn cross) leads Alice, who is at −20 from the four penalties.
   const board = client.getByRole('status')
   const rows = board.getByRole('listitem')
   await expect(rows).toHaveCount(2)
@@ -171,16 +240,17 @@ test('the game ends for everyone when a player takes a fourth penalty', async ({
   const hostHistory = host.getByRole('dialog', { name: 'Game history' })
   await host.getByRole('button', { name: 'Open menu' }).click()
   await host.getByRole('button', { name: 'Game history · 1' }).click()
-  await expect(hostHistory).toContainText('🏆 Bob 0')
+  await expect(hostHistory).toContainText('🏆 Bob 1')
   await expect(hostHistory).toContainText('Alice (you) -20')
   await hostHistory.getByRole('button', { name: 'Close' }).click() // back to the game
   await expect(hostHistory).toHaveCount(0)
 
-  // Taking the penalty back resumes the game for everyone.
+  // Even a declared end can be taken back: undoing the fourth penalty resumes
+  // the game for everyone.
   await host.getByRole('button', { name: 'Undo' }).click()
   await expect(host.getByText('Game over')).toHaveCount(0)
   await expect(client.getByText('Game over')).toHaveCount(0)
-  await expect(client.getByRole('button', { name: 'red 2' })).toBeEnabled()
+  await expect(client.getByRole('button', { name: 'red 5' })).toBeEnabled()
 
   // …and the record of the un-ended game is dropped from the history again.
   await host.getByRole('button', { name: 'Open menu' }).click()
@@ -192,9 +262,12 @@ test('the game ends for everyone when a player takes a fourth penalty', async ({
 test('anyone can start a new game, resetting the room', async ({ browser }) => {
   const { host, client } = await connectHostAndClient(browser)
 
-  // Host builds a score and ends the game with a fourth penalty (one at a time).
+  // Host builds a score and ends the game with a fourth penalty (one at a time);
+  // both players confirm the final turn to complete the end.
   await host.getByRole('button', { name: 'red 7' }).click()
   for (const n of [1, 2, 3, 4]) await host.getByRole('button', { name: `Penalty ${n}` }).click()
+  await host.getByRole('button', { name: 'I’m done' }).click()
+  await client.getByRole('button', { name: 'I’m done' }).click()
   await expect(host.getByText('Game over')).toBeVisible()
   await expect(client.getByText('Game over')).toBeVisible()
 

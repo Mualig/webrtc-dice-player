@@ -1,3 +1,4 @@
+import { isGameOverReason } from './scorecard'
 import type { GameOverReason } from './scorecard'
 
 // One player's final result inside a recorded game — also what the game-over
@@ -25,7 +26,7 @@ export function loadGameHistory(): GameRecord[] {
       .filter(
         (g) =>
           typeof g?.endedAt === 'number' &&
-          (g?.reason === 'locks' || g?.reason === 'penalties') &&
+          isGameOverReason(g?.reason) &&
           Array.isArray(g?.players) &&
           g.players.every((p: PlayerResult | null) => typeof p?.name === 'string' && typeof p?.total === 'number'),
       )

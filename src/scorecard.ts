@@ -176,8 +176,20 @@ export function lockedAcross(summaries: Record<string, CardSummary>): RowColor[]
 // the game, so it doubles as an end-of-game trigger.
 export const MAX_PENALTY_TOTAL = MAX_PENALTIES * PENALTY_VALUE
 
-// Why the game ended, or null while it's still going.
-export type GameOverReason = 'locks' | 'penalties'
+// Why the game ended, or null while it's still going. The type derives from the
+// const list so every consumer that enumerates the reasons (wire validation,
+// stored-history validation) follows a new variant automatically.
+export const GAME_OVER_REASONS = ['locks', 'penalties'] as const
+export type GameOverReason = (typeof GAME_OVER_REASONS)[number]
+export const isGameOverReason = (v: unknown): v is GameOverReason =>
+  GAME_OVER_REASONS.some((r) => r === v)
+
+// The end-of-game handshake. When the end condition is met, the game enters a
+// *final turn* instead of stopping instantly — everyone may still mark off the
+// current roll (per the paper rules, the end takes effect when the turn is
+// over). `ready` collects the players who confirmed they're done; `over` is set
+// (with the reason) once every rostered player has.
+export type Ending = { ready: string[]; over: GameOverReason | null }
 
 // The Qwixx end conditions, evaluated over the shared summaries: the game is over
 // once two rows are locked anywhere in the room, or any player has taken all four

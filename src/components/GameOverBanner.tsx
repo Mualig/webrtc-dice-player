@@ -1,5 +1,6 @@
 import type { GameOverReason } from '../scorecard'
 import type { PlayerResult } from '../gameHistory'
+import { END_REASON_TEXT } from './endReasonText'
 
 // The end-of-game banner: why the game ended, plus a leaderboard of every player
 // ranked by final total (winner first, with a trophy; the local player marked).
@@ -22,7 +23,7 @@ export function GameOverBanner({
     >
       <p className="text-xl font-bold text-amber-900">🎲 Game over</p>
       <p className="mt-1 text-sm text-amber-800">
-        {reason === 'locks' ? 'Two rows were locked.' : 'A player took their fourth penalty.'}
+        {END_REASON_TEXT[reason].final}
       </p>
       <ol className="mt-4 flex flex-col gap-1.5 text-left">
         {players.map((p, i) => (

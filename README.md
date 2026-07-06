@@ -18,10 +18,13 @@ server, no data leaving your table.
   and is authoritative for shared state. The roster tags the host and yourself.
 - 👀 **Shared game state** — a live activity feed of every player's moves (undos strike the
   original entry), each player's score breakdown on an "Other players" board, and shared row
-  locks: when anyone locks a color, its die stops rolling and that row closes for the whole room.
-- 🏁 **Game over, by the rules** — the game ends for everyone once two rows are locked or a
-  player takes their fourth penalty, with a ranked leaderboard and a **New game** button that
-  resets the whole room. Ending on a misclick? Undo it and play resumes.
+  locks: when anyone locks a color, its die stops rolling and that row closes for the whole
+  room — starting from the *next* roll, so everyone may finish the current one first (even
+  locking the same row too, like the paper game).
+- 🏁 **Game over, by the rules** — two locked rows or a fourth penalty starts a *final turn*:
+  everyone finishes marking the current roll and confirms with **I'm done**, then the game ends
+  for the whole room with a ranked leaderboard and a **New game** button that resets it.
+  Ending on a misclick? Undo it and play resumes.
 - 📜 **Game history** — finished games are saved on your device (last 100), browsable from the
   menu, each entry removable.
 - 🧍 **Solo mode** — everything works without a room, too.
@@ -74,14 +77,19 @@ between peers.
 
 - **Stack** — React 19, TypeScript, Vite, Tailwind CSS v4, PeerJS.
 - **Host-authoritative protocol** — clients send intents (`roll`, `action`, `score`,
-  `newgame`); the host applies them and broadcasts the resulting state (`state`, `actions`,
-  `scores`, `roster`) to everyone. Joining mid-game gets you the full current state.
+  `newgame`, `done`); the host applies them and broadcasts the resulting state (`state`,
+  `actions`, `scores`, `roster`, `ending`) to everyone. Joining mid-game gets you the full
+  current state. Incoming payloads are never trusted: every message is shape-validated
+  (`parseMessage`) on receipt, and malformed data is dropped.
 - **Rooms** — the host registers on the signaling broker under an id derived from the room
   code, so clients can dial it directly (and anyone can tell who hosts). The broker is only
   used to establish the connection.
-- **Derived game-over** — each card reports a summary (score breakdown + locked rows); every
-  peer derives locks, standings, and the end-of-game from the same shared summaries, so the
-  whole room always agrees — and undoing the final move resumes play everywhere.
+- **Derived game-over, turn-boundary effects** — each card reports a summary (score breakdown
+  + locked rows); every peer derives standings and the end condition from the same shared
+  summaries, so the whole room always agrees. Reported locks only take effect at the next roll
+  (the host snapshots them onto the `state` message), and the end condition opens a final turn
+  that the host closes once every player has confirmed — so two players acting at once never
+  lock each other out. Undoing the trigger move resumes play everywhere.
 - **Layout** — game rules live in `src/scorecard.ts`, networking in `src/usePeerSync.ts`, the
   wire protocol in `src/types.ts`, history persistence in `src/gameHistory.ts`, and the UI in
   `src/components/`.
